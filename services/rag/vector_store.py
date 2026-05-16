@@ -21,7 +21,8 @@ class TextEmbedder:
         try:
             from sentence_transformers import SentenceTransformer
             self.model = SentenceTransformer(model_name)
-            self.embedding_dim = self.model.get_sentence_embedding_dimension()
+            # Use get_embedding_dimension() (replaces deprecated get_sentence_embedding_dimension())
+            self.embedding_dim = self.model.get_embedding_dimension()
             logger.info(f"TextEmbedder initialized: {model_name} (dim={self.embedding_dim})")
         except ImportError:
             logger.warning("sentence-transformers not installed. Using mock embedder.")

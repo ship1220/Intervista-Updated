@@ -16,7 +16,11 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy import inspect, text
 from sqlalchemy.orm import Session
 from passlib.context import CryptContext
-from sse_starlette.sse import EventSourceResponse
+try:
+    from sse_starlette.sse import EventSourceResponse
+except Exception:
+    EventSourceResponse = None
+    # Defer import failure until SSE endpoints are used; log a warning at runtime
 from database import Base, engine, SessionLocal
 from models import (
     User,
@@ -146,7 +150,11 @@ app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="stat
 
 logger = logging.getLogger(__name__)
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+# Use PBKDF2-SHA512 as primary (no 72-byte limit), keep bcrypt for backward compatibility
+pwd_context = CryptContext(
+    schemes=["pbkdf2_sha512", "bcrypt"],
+    deprecated="auto"
+)
 
 # In-memory interview session store (swap for Redis in production)
 interview_sessions: dict[str, dict] = {}
@@ -543,13 +551,15 @@ def get_current_user(request: Request, db: Session):
     return db.query(User).filter(User.username == username).first()
 
 def hash_password(password: str):
-    password = password[:72]  # bcrypt limit
+    # PBKDF2-SHA512 has no length limit; full password is always hashed
     return pwd_context.hash(password)
 
 def verify_password(plain: str, hashed: str):
     try:
-        return pwd_context.verify(plain[:72], hashed)
-    except Exception:
+        # Verify against hashed password (works with both PBKDF2 and legacy bcrypt)
+        return pwd_context.verify(plain, hashed)
+    except Exception as e:
+        logger.warning(f"Password verification error: {e}")
         return False
 
 
@@ -634,16 +644,16 @@ def update_skill_profile(db: Session, user_id: int, skill_data: dict):
 # ===========================================================================
 @app.get("/", response_class=HTMLResponse)
 def home(request: Request):
-    return templates.TemplateResponse("home.html", {"request": request})
+    return templates.TemplateResponse(request, "home.html", {"request": request})
 
 @app.get("/signup", response_class=HTMLResponse)
 def signup_page(request: Request):
-    return templates.TemplateResponse("signup.html", {"request": request})
+    return templates.TemplateResponse(request, "signup.html", {"request": request})
 
 @app.post("/signup")
 def signup(request: Request, username: str = Form(...), password: str = Form(...), db: Session = Depends(get_db)):
     if db.query(User).filter(User.username == username).first():
-        return templates.TemplateResponse("signup.html", {"request": request, "message": "User already exists"})
+        return templates.TemplateResponse(request, "signup.html", {"request": request, "message": "User already exists"})
     hashed_password = hash_password(password)
     user = User(username=username, password=hashed_password)
     db.add(user)
@@ -652,22 +662,18 @@ def signup(request: Request, username: str = Form(...), password: str = Form(...
 
 @app.get("/login", response_class=HTMLResponse)
 def login_page(request: Request):
-    return templates.TemplateResponse("login.html", {"request": request})
+    return templates.TemplateResponse(request, "login.html", {"request": request})
 
 @app.post("/login")
 def login(request: Request, username: str = Form(...), password: str = Form(...), db: Session = Depends(get_db)):
     user = db.query(User).filter(User.username == username).first()
 
     if not user:
-        return templates.TemplateResponse(
-            "login.html",
-            {"request": request, "message": "Invalid credentials"}
+        return templates.TemplateResponse(request, "login.html", {"request": request, "message": "Invalid credentials"}
         )
 
     if not verify_password(password, user.password):
-        return templates.TemplateResponse(
-            "login.html",
-            {"request": request, "message": "Invalid credentials"}
+        return templates.TemplateResponse(request, "login.html", {"request": request, "message": "Invalid credentials"}
         )
 
     # Ensure a profile row exists for this user.
@@ -718,9 +724,7 @@ def index(request: Request, db: Session = Depends(get_db)):
     role = profile.role_applied_for if profile else ""
     level = profile.current_designation if profile else ""
 
-    return templates.TemplateResponse(
-        "index.html",
-        {
+    return templates.TemplateResponse(request, "index.html", {
             "request": request,
             "username": user.username,
             "saved_role": role,
@@ -734,7 +738,7 @@ def progress_page(request: Request, db: Session = Depends(get_db)):
     if not user:
         return RedirectResponse("/login")
     skills = db.query(SkillProgress).filter(SkillProgress.user_id == user.id).all()
-    return templates.TemplateResponse("progress.html", {"request": request, "username": user.username, "skills": skills})
+    return templates.TemplateResponse(request, "progress.html", {"request": request, "username": user.username, "skills": skills})
 
 
 @app.get("/progress/", response_class=HTMLResponse)
@@ -904,9 +908,7 @@ def _build_interview_context(request: Request, user, role: str, level: str, cour
         "categories": []
     }
 
-    return templates.TemplateResponse(
-        "interview.html",
-        {
+    return templates.TemplateResponse(request, "interview.html", {
             "request": request,
             "username": user.username,
             "user_id": user.id,
@@ -1005,9 +1007,7 @@ def start_interview_get(
 
     logger.info("Interview started")
 
-    return templates.TemplateResponse(
-        "interview.html",
-        {
+    return templates.TemplateResponse(request, "interview.html", {
             "request": request,
             "username": user.username,
             "user_id": user.id,
@@ -1031,9 +1031,7 @@ def generate_course_page(
     if not user:
         raise HTTPException(status_code=401, detail="Not logged in")
 
-    return templates.TemplateResponse(
-        "course.html",
-        {
+    return templates.TemplateResponse(request, "course.html", {
             "request": request,
             "username": user.username,
             "role": role,
@@ -1821,9 +1819,7 @@ def report_page(request: Request, db: Session = Depends(get_db)):
     report = report_store.get(user.username)
     if not report:
         return RedirectResponse("/index")
-    return templates.TemplateResponse(
-        "report.html",
-        {
+    return templates.TemplateResponse(request, "report.html", {
             "request": request,
             "username": user.username,
             "report": report,
@@ -1866,9 +1862,7 @@ def interview_report_page(
     except Exception:
         report = {}
 
-    return templates.TemplateResponse(
-        "report.html",
-        {
+    return templates.TemplateResponse(request, "report.html", {
             "request": request,
             "username": user.username,
             "report": report
@@ -2069,9 +2063,7 @@ def profile_page(request: Request, db: Session = Depends(get_db)):
 
     logger.info("Course history built for user_id=%s courses=%s", user.id, len(course_history))
 
-    return templates.TemplateResponse(
-        "profile.html",
-        {
+    return templates.TemplateResponse(request, "profile.html", {
             "request": request,
             "username": user.username,
             "user_profile": profile_row,
@@ -2508,9 +2500,7 @@ def course_page(request: Request, course_id: int, db: Session = Depends(get_db))
         .all()
     )
 
-    return templates.TemplateResponse(
-        "course.html",
-        {
+    return templates.TemplateResponse(request, "course.html", {
             "request": request,
             "username": user.username,
             "course": course,
@@ -2536,9 +2526,7 @@ def module_page(request: Request, module_id: int, db: Session = Depends(get_db))
     if not module.is_unlocked:
         raise HTTPException(status_code=403, detail="Module not unlocked yet")
 
-    return templates.TemplateResponse(
-        "module.html",
-        {
+    return templates.TemplateResponse(request, "module.html", {
             "request": request,
             "username": user.username,
             "module_id": module.id,
