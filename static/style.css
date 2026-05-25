@@ -179,6 +179,24 @@ gap:12px;
 flex-wrap:wrap;
 }
 
+.choice-actions{
+display:flex;
+justify-content:center;
+align-items:center;
+gap:16px;
+flex-wrap:wrap;
+}
+
+.choice-actions form{
+margin:0;
+flex:0 1 220px;
+}
+
+.choice-actions button{
+width:100%;
+min-height:44px;
+}
+
 
 /* ================= STATS ================= */
 

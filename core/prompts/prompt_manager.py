@@ -117,27 +117,40 @@ Return ONLY JSON:
         """Evaluate interview answer with CKFS metrics for RL integration."""
         template = """You are evaluating an interview answer for a {level} {role} candidate.
 
-IMPORTANT: Answers come from speech transcription. Ignore grammar errors.
+IMPORTANT: The answer is from speech-to-text. Ignore spelling/grammar/STT mistakes.
+Judge intent and substance. Do not penalize homophones or minor word errors.
 
 Scoring rules:
-- 0 → Question skipped or empty answer
-- 10-20 → Completely incorrect answer
-- 50-70 → Conceptually correct but poorly structured
-- 80-90 → Correct, clear explanation  
-- 90-100 → Excellent with strong understanding
+- 0 → skipped or empty
+- 10-30 → wrong or no substance
+- 50-70 → partially correct, weak structure
+- 80-90 → solid, relevant, reasonably structured
+- 90-100 → excellent depth and structure
 
-Question (first 120 chars):
+Dimension scoring (each 0-100, must reflect THIS answer):
+- relevance_score: Does the answer address the question asked?
+- explanation_depth_score: Technical/role depth and examples
+- star_method_score: Behavioral answers — clear Situation, Task, Action, Result (0 if not behavioral)
+- structured_thinking_score: Logical flow, steps, cause-effect, signposting
+- problem_solving_score: Approach, trade-offs, solution quality (0 if not a problem-solving question)
+
+Question:
 {question}
 
-Candidate Answer (first 1500 chars):
+Candidate Answer:
 {answer}
 
-Return ONLY valid JSON with no markdown:
+Return ONLY valid JSON:
 {{
  "score": <number 0-100>,
- "strengths": ["strength1", "strength2"],
- "weaknesses": ["weakness1", "weakness2"],
- "ideal_answer": "short example ideal answer on how the user should've answered (max 5 sentences)",
+ "relevance_score": <number 0-100>,
+ "explanation_depth_score": <number 0-100>,
+ "star_method_score": <number 0-100>,
+ "structured_thinking_score": <number 0-100>,
+ "problem_solving_score": <number 0-100>,
+ "strengths": ["..."],
+ "weaknesses": ["..."],
+ "ideal_answer": "max 5 sentences",
  "weak_topics": ["topic1", "topic2"],
  "C": <float 0.0-1.0>,
  "K": <float 0.0-1.0>,
@@ -145,19 +158,13 @@ Return ONLY valid JSON with no markdown:
  "S": <float 0.0-1.0>
 }}
 
-Metrics:
-- C (Correctness): How correct/accurate the answer is (0.0=completely wrong, 1.0=perfect)
-- K (Knowledge/Confidence): Candidate's knowledge depth and confidence (0.0=no confidence, 1.0=very confident)
-- F (Fluency): How smoothly/clearly the answer flows (0.0=very rough, 1.0=very fluent)
-- S (Sentiment): Positive sentiment and engagement (0.0=negative/disengaged, 1.0=positive/highly engaged)
-
-STRICT: Return ONLY valid JSON. No extra text. No explanation. Output must start with {{ and end with }}."""
+STRICT: JSON only. No markdown."""
         
         self._register(
             "evaluate_answer",
             template,
             PromptCategory.EVALUATION,
-            "3.0"
+            "4.0"
         )
     
     def _register_performance_summary(self):
@@ -190,9 +197,21 @@ STRICT: Return ONLY the summary text. No JSON, no markdown, no extra text."""
         """Generate course outline."""
         template = """You are a senior curriculum designer.
 
-Create a structured course outline for: {skill}
-Target Level: {level}
+Role/skill: {skill}
+Learner designation: {level}
 Duration: {duration_hours} hours
+REQUIRED curriculum difficulty: {target_difficulty}
+Bandit learning path: {bandit_action}
+Suggested course title (use exactly or very close): {title_hint}
+
+{strict_requirements}
+
+Rules:
+- Module depth MUST match REQUIRED curriculum difficulty (easy=foundational, hard=advanced/expert).
+- Do NOT produce a beginner course when difficulty is hard/advanced.
+- Do NOT produce an expert course when difficulty is easy.
+- First 2 modules must cover the mandated weak topics.
+- course_title must reflect difficulty and topics (not a generic name).
 
 Return JSON:
 
@@ -214,7 +233,7 @@ Return JSON:
             "course_outline",
             template,
             PromptCategory.COURSE,
-            "1.0"
+            "2.0"
         )
     
     def _register_course_module_detail(self):

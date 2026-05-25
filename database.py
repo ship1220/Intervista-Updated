@@ -9,7 +9,6 @@ DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
 
 if not DATABASE_URL:
     DATABASE_URL = "sqlite:///./jobprepmate.db"
-    print("[INFO] DATABASE_URL not set; falling back to SQLite at jobprepmate.db")
 
 try:
     if DATABASE_URL.startswith("sqlite"):
@@ -26,8 +25,11 @@ try:
 except ImportError as e:
     missing = str(e)
     if "psycopg2" in missing or "asyncpg" in missing:
-        print(f"[WARNING] Database driver missing: {missing}")
-        print("[INFO] Falling back to SQLite database at jobprepmate.db")
+        import logging
+        logging.getLogger("database").warning(
+            "Database driver missing (%s); falling back to SQLite at jobprepmate.db",
+            missing,
+        )
         DATABASE_URL = "sqlite:///./jobprepmate.db"
         engine = create_engine(
             DATABASE_URL,

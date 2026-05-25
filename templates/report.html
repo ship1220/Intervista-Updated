@@ -37,8 +37,7 @@
             <div class="user-name">{{ username }}</div>
           </div>
 
-          <a href="/profile" class="dropdown-item">View Profile</a>
-          <a href="/progress/" class="dropdown-item">Progress</a>
+          <a href="/profile" class="dropdown-item">Dashboard</a>
           <a href="/logout" class="dropdown-item danger">Logout</a>
         </div>
       </div>
@@ -211,9 +210,11 @@ Confidence: {{ report.verdict.confidence_level }}
       {% endif %}
     {% endfor %}
   </p>
-  <a href="/course/{{ report.new_course.course_id }}" class="btn btn-primary">
-    Start Your Improvement Course
-  </a>
+  <div style="margin-top: 20px;">
+    <a href="/course/{{ report.new_course.course_id }}" class="btn btn-primary">
+      Start Your Improvement Course
+    </a>
+  </div>
 </section>
 {% endif %}
 
@@ -462,8 +463,8 @@ Give Interview Again
 
 <a href="/index" class="btn outline">Back to Dashboard</a>
 
-<a href="/progress" class="btn outline">
-View Progress
+<a href="/profile" class="btn outline">
+View Dashboard
 </a>
 
 </div>

@@ -1,0 +1,710 @@
+/* Profile dashboard — adaptive learning flow */
+
+.profile-dashboard {
+  background: #f6f8fb;
+}
+
+.profile-dashboard .dashboard-main {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 0 20px 56px;
+}
+
+.profile-dashboard .page-header {
+  max-width: 1100px;
+  margin: 20px auto 24px;
+  padding: 0 20px;
+}
+
+.profile-dashboard .page-header h1 {
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: #111827;
+}
+
+.profile-dashboard .page-subtitle {
+  color: #6b7280;
+  font-size: 0.9rem;
+  margin-top: 4px;
+}
+
+/* Section shell */
+.dash-section {
+  background: #fff;
+  border: 1px solid #e6eaf0;
+  border-radius: 14px;
+  padding: 22px 24px;
+  margin-bottom: 20px;
+  box-shadow: 0 6px 18px rgba(15, 23, 42, 0.04);
+}
+
+.dash-section h2 {
+  font-size: 1rem;
+  font-weight: 600;
+  color: #111827;
+  margin: 0 0 18px;
+  letter-spacing: -0.01em;
+}
+
+.dash-section h2 .sec-num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  background: #eff6ff;
+  color: #2563eb;
+  font-size: 0.75rem;
+  margin-right: 8px;
+}
+
+/* 1 — Profile header */
+.profile-header-grid {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 20px;
+  align-items: start;
+}
+
+@media (max-width: 720px) {
+  .profile-header-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.profile-identity .profile-name {
+  font-size: 1.35rem;
+  font-weight: 700;
+  color: #111827;
+  margin-bottom: 12px;
+}
+
+.profile-meta-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.meta-pill {
+  background: #f3f4f6;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 8px 14px;
+  font-size: 0.85rem;
+}
+
+.meta-pill strong {
+  display: block;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #9ca3af;
+  margin-bottom: 2px;
+}
+
+.profile-resume-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  align-items: flex-end;
+}
+
+@media (max-width: 720px) {
+  .profile-resume-actions {
+    align-items: stretch;
+  }
+}
+
+.profile-resume-actions form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.profile-resume-actions input[type="file"] {
+  font-size: 0.8rem;
+  max-width: 200px;
+}
+
+/* 2 — Skill snapshot KPIs */
+.snapshot-kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 14px;
+}
+
+.snapshot-kpi {
+  background: #f8fafc;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  padding: 16px;
+  text-align: center;
+}
+
+.snapshot-kpi--primary {
+  background: linear-gradient(160deg, #eff6ff, #f8fafc);
+  border-color: #bfdbfe;
+}
+
+.snapshot-kpi-value {
+  display: block;
+  font-size: 1.75rem;
+  font-weight: 700;
+  color: #111827;
+  line-height: 1.1;
+}
+
+.snapshot-kpi--count .snapshot-kpi-value {
+  font-size: 1.5rem;
+}
+
+.snapshot-kpi-label {
+  display: block;
+  margin-top: 6px;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #6b7280;
+}
+
+/* 3 — Analysis table + focus */
+.subheading {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #374151;
+  margin-bottom: 12px;
+}
+
+.analysis-split {
+  display: grid;
+  grid-template-columns: 1.4fr 0.9fr;
+  gap: 24px;
+  align-items: start;
+}
+
+@media (max-width: 900px) {
+  .analysis-split {
+    grid-template-columns: 1fr;
+  }
+}
+
+.analysis-table-wrap {
+  overflow-x: auto;
+}
+
+.analysis-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+
+.analysis-table th {
+  text-align: left;
+  padding: 10px 12px;
+  background: #f9fafb;
+  color: #6b7280;
+  font-weight: 600;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.analysis-table td {
+  padding: 10px 12px;
+  border-bottom: 1px solid #f1f5f9;
+}
+
+.tier-badge {
+  font-size: 0.72rem;
+  padding: 3px 8px;
+  border-radius: 999px;
+  text-transform: capitalize;
+}
+
+.tier-badge--strong {
+  background: #d1fae5;
+  color: #047857;
+}
+
+.tier-badge--developing {
+  background: #fef3c7;
+  color: #b45309;
+}
+
+.tier-badge--weak {
+  background: #fee2e2;
+  color: #b91c1c;
+}
+
+.focus-actions {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.focus-actions li {
+  padding: 12px 0;
+  border-bottom: 1px solid #eef0f4;
+}
+
+.focus-actions li:last-child {
+  border-bottom: none;
+}
+
+.focus-actions-head {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 4px;
+}
+
+.focus-actions-name {
+  font-weight: 600;
+  font-size: 0.88rem;
+  color: #111827;
+}
+
+.focus-actions-score {
+  font-size: 0.8rem;
+  color: #b45309;
+  font-weight: 600;
+}
+
+.focus-actions-text {
+  font-size: 0.82rem;
+  color: #4b5563;
+  line-height: 1.45;
+  margin: 0;
+}
+
+.breakdown-columns {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+}
+
+@media (max-width: 500px) {
+  .breakdown-columns {
+    grid-template-columns: 1fr;
+  }
+}
+
+.breakdown-col h3 {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: #2563eb;
+  margin-bottom: 10px;
+}
+
+.skill-row {
+  display: grid;
+  grid-template-columns: 108px 1fr 36px;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.skill-label {
+  font-size: 0.78rem;
+  font-weight: 500;
+  color: #374151;
+}
+
+.skill-bar {
+  height: 7px;
+  background: #eef2f7;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.skill-fill {
+  height: 100%;
+  border-radius: 4px;
+}
+
+.skill-percent {
+  font-size: 0.75rem;
+  color: #6b7280;
+  text-align: right;
+}
+
+.focus-panel {
+  background: #fafbfc;
+  border: 1px solid #eef0f4;
+  border-radius: 10px;
+  padding: 16px;
+}
+
+.focus-panel h3 {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: #111827;
+  margin-bottom: 12px;
+}
+
+.focus-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.focus-list li {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 0;
+  border-bottom: 1px solid #eef0f4;
+  font-size: 0.85rem;
+}
+
+.focus-list li:last-child {
+  border-bottom: none;
+}
+
+.focus-list .focus-score {
+  font-weight: 600;
+  font-size: 0.8rem;
+  color: #b45309;
+}
+
+.focus-hint {
+  margin-top: 12px;
+  font-size: 0.82rem;
+  color: #6b7280;
+  line-height: 1.45;
+}
+
+/* 4 — Performance chart */
+.chart-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.chart-toolbar label {
+  font-size: 0.85rem;
+  color: #6b7280;
+}
+
+.chart-toolbar select {
+  padding: 8px 12px;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  font-size: 0.88rem;
+  background: #fff;
+}
+
+.chart-wrap {
+  height: 260px;
+  position: relative;
+}
+
+/* 5 — Unified learning timeline */
+.timeline-intro {
+  font-size: 0.88rem;
+  color: #6b7280;
+  margin: -8px 0 18px;
+  line-height: 1.5;
+}
+
+.role-group {
+  margin-bottom: 24px;
+}
+
+.role-group:last-child {
+  margin-bottom: 0;
+}
+
+.role-group-title {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: #1e40af;
+  padding-bottom: 10px;
+  margin-bottom: 12px;
+  border-bottom: 2px solid #dbeafe;
+}
+
+/* Interview timeline item */
+.tl-interview {
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  margin-bottom: 10px;
+  overflow: hidden;
+  background: #fff;
+}
+
+.tl-interview > summary {
+  list-style: none;
+  cursor: pointer;
+  padding: 14px 16px;
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 12px;
+  align-items: center;
+  background: #f9fafb;
+}
+
+.tl-interview > summary::-webkit-details-marker {
+  display: none;
+}
+
+.tl-interview > summary::after {
+  content: "▾";
+  color: #9ca3af;
+  font-size: 0.85rem;
+  transition: transform 0.2s;
+}
+
+.tl-interview[open] > summary::after {
+  transform: rotate(180deg);
+}
+
+.tl-date-badge {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #6b7280;
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  padding: 4px 8px;
+  white-space: nowrap;
+}
+
+.tl-summary-main {
+  min-width: 0;
+}
+
+.tl-summary-title {
+  font-weight: 600;
+  font-size: 0.9rem;
+  color: #111827;
+}
+
+.tl-summary-sub {
+  font-size: 0.8rem;
+  color: #6b7280;
+  margin-top: 2px;
+}
+
+.tl-score-pill {
+  font-weight: 700;
+  font-size: 0.9rem;
+  padding: 6px 12px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.tl-score-pill--high {
+  background: #d1fae5;
+  color: #047857;
+}
+
+.tl-score-pill--mid {
+  background: #fef3c7;
+  color: #b45309;
+}
+
+.tl-score-pill--low {
+  background: #fee2e2;
+  color: #b91c1c;
+}
+
+.tl-body {
+  padding: 16px 18px 18px;
+  border-top: 1px solid #eef0f4;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.tl-block h4 {
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #9ca3af;
+  margin-bottom: 8px;
+}
+
+.tl-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.tl-tag {
+  font-size: 0.78rem;
+  padding: 4px 10px;
+  border-radius: 6px;
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.tl-tag--blue {
+  background: #dbeafe;
+  color: #1d4ed8;
+}
+
+.tl-tag--muted {
+  background: #f3f4f6;
+  color: #4b5563;
+}
+
+.tl-summary-text {
+  font-size: 0.88rem;
+  color: #4b5563;
+  line-height: 1.5;
+}
+
+.tl-course-card {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  padding: 14px;
+}
+
+.tl-course-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.tl-course-title {
+  font-weight: 600;
+  color: #111827;
+  text-decoration: none;
+  font-size: 0.95rem;
+}
+
+.tl-course-title:hover {
+  color: #2563eb;
+}
+
+.tl-module-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.tl-module-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 6px 10px;
+  align-items: center;
+  font-size: 0.8rem;
+}
+
+.tl-module-row .progress-track {
+  grid-column: 1 / -1;
+  height: 5px;
+  background: #e5e7eb;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.tl-module-row .progress-fill {
+  height: 100%;
+  background: #2563eb;
+  border-radius: 4px;
+}
+
+.tl-module-row .progress-fill--done {
+  background: #10b981;
+}
+
+.tl-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.progress-track {
+  height: 8px;
+  background: #e5e7eb;
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #2563eb, #3b82f6);
+  border-radius: 6px;
+}
+
+.progress-fill--complete {
+  background: linear-gradient(90deg, #059669, #10b981);
+}
+
+/* Self-paced courses — single container */
+.standalone-container {
+  margin-top: 28px;
+  padding-top: 20px;
+  border-top: 2px solid #e5e7eb;
+}
+
+.standalone-heading {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: #374151;
+  margin-bottom: 14px;
+}
+
+.standalone-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.standalone-card {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  padding: 14px 16px;
+  background: #f9fafb;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+}
+
+.standalone-card-main {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.standalone-card-title {
+  font-weight: 600;
+  color: #111827;
+  font-size: 0.92rem;
+}
+
+.standalone-card-progress {
+  font-size: 0.8rem;
+  color: #6b7280;
+}
+
+@media (max-width: 560px) {
+  .standalone-card {
+    flex-direction: column;
+    align-items: stretch;
+  }
+}
+
+.empty-state {
+  color: #9ca3af;
+  font-size: 0.9rem;
+  padding: 8px 0;
+}
+
+.empty-state-box {
+  text-align: center;
+  padding: 28px 16px;
+}
+
+.empty-state-box .btn {
+  margin-top: 12px;
+}

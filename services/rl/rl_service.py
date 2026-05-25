@@ -22,6 +22,7 @@ import random
 from typing import Optional, Tuple
 from sqlalchemy.orm import Session
 from models import QTable, UserState
+from utils.bandit_logger import log_bandit_action_selection
 
 logger = logging.getLogger(__name__)
 
@@ -81,8 +82,6 @@ class ContextualBandit:
         else:
             raise ValueError(f"Unknown action space: {action_space}")
 
-        logger.info(f"ContextualBandit initialized for {action_space} with {len(self.actions)} actions")
-
     # ========================================================================
     # ACTION SELECTION (ε-GREEDY)
     # ========================================================================
@@ -108,31 +107,39 @@ class ContextualBandit:
             Selected action name (string)
         """
         session_count = user_state.session_count if user_state else 0
+        q_values = self.get_q_value_dict(state_id)
 
         # ====== COLD START ======
         if session_count < COLD_START_THRESHOLD:
             action = self._cold_start_action()
-            logger.info(
-                f"[BANDIT] COLD_START: session_count={session_count} state_id={state_id} → action={action}"
+            mode = f"COLD START (sessions < {COLD_START_THRESHOLD})"
+            log_bandit_action_selection(
+                state_id=state_id,
+                q_values=q_values,
+                epsilon=EPSILON,
+                session_count=session_count,
+                mode=mode,
+                selected_action=action,
             )
             return action
 
         # ====== EXPLOIT vs EXPLORE ======
-        q_values = self.get_q_value_dict(state_id)
-        
-        if random.random() < (1 - EPSILON):
-            # EXPLOIT: choose action with highest avg_reward
+        explore_roll = random.random()
+        if explore_roll >= EPSILON:
             action = self._greedy_action(state_id, q_values)
-            logger.info(
-                f"[BANDIT] EXPLOIT: state_id={state_id} action={action} q_values={q_values}"
-            )
+            mode = f"EXPLOIT (roll={explore_roll:.3f} >= ε={EPSILON})"
         else:
-            # EXPLORE: choose random action
             action = random.choice(list(self.actions.keys()))
-            logger.info(
-                f"[BANDIT] EXPLORE: state_id={state_id} action={action} q_values={q_values}"
-            )
+            mode = f"EXPLORE (roll={explore_roll:.3f} < ε={EPSILON})"
 
+        log_bandit_action_selection(
+            state_id=state_id,
+            q_values=q_values,
+            epsilon=EPSILON,
+            session_count=session_count,
+            mode=mode,
+            selected_action=action,
+        )
         return action
 
     def _cold_start_action(self) -> str:
@@ -262,10 +269,15 @@ class ContextualBandit:
 
             self.db.commit()
 
-            logger.info(
-                f"[BANDIT] UPDATE: state_id={state_id} action_id={action_id} "
-                f"reward={reward:.3f} Q_old={old_q:.3f} → Q_new={new_q:.3f} "
-                f"visit_count={q_record.visit_count}"
+            from utils.bandit_logger import log_q_value_update
+
+            log_q_value_update(
+                state_id=state_id,
+                action_id=action_id,
+                reward=reward,
+                old_q=old_q,
+                new_q=new_q,
+                visit_count=q_record.visit_count,
             )
 
             return old_q, new_q

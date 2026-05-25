@@ -4,6 +4,41 @@ import time
 import subprocess
 from typing import Optional
 
+# Common STT mis-hearings — normalize before scoring (not a full spell-checker)
+_STT_REPLACEMENTS = (
+    (r"\bteh\b", "the"),
+    (r"\bwich\b", "which"),
+    (r"\bthier\b", "their"),
+    (r"\brecieve\b", "receive"),
+    (r"\bseperate\b", "separate"),
+    (r"\bdefinately\b", "definitely"),
+    (r"\bimplemention\b", "implementation"),
+    (r"\balot\b", "a lot"),
+    (r"\bcuz\b", "because"),
+    (r"\bwanna\b", "want to"),
+    (r"\bgonna\b", "going to"),
+)
+
+
+def normalize_transcript(text: str) -> str:
+    """
+    Light cleanup for speech-to-text answers before LLM/heuristic evaluation.
+    Reduces penalty from minor transcription noise.
+    """
+    if not text:
+        return ""
+    cleaned = str(text).strip()
+    cleaned = re.sub(r"\s+", " ", cleaned)
+    cleaned = re.sub(r"(.)\1{3,}", r"\1\1", cleaned)  # collapse long char repeats
+    lower = cleaned.lower()
+    for pattern, repl in _STT_REPLACEMENTS:
+        lower = re.sub(pattern, repl, lower, flags=re.IGNORECASE)
+    # Preserve sentence casing loosely: capitalize first char
+    if lower:
+        lower = lower[0].upper() + lower[1:] if len(lower) > 1 else lower.upper()
+    return lower
+
+
 FILLER_WORDS = {
     "um",
     "uh",
@@ -49,6 +84,7 @@ def _convert_audio(input_path: str, output_path: str):
 
 
 def analyze_speech_delivery(answer: str, duration_seconds: float) -> dict:
+    answer = normalize_transcript(answer)
     if not answer.strip():
         return {
             "word_count": 0,
@@ -152,8 +188,14 @@ def transcribe_audio(file_path: str) -> str:
         converted_path = f"converted_{int(time.time() * 1000)}.wav"
         _convert_audio(file_path, converted_path)
         model = _get_whisper_model()
-        result = model.transcribe(converted_path, language="en", beam_size=5, temperature=0)
-        return result.get("text", "").strip()
+        result = model.transcribe(
+            converted_path,
+            language="en",
+            beam_size=5,
+            temperature=0,
+            initial_prompt="Technical job interview answer with complete sentences.",
+        )
+        return normalize_transcript(result.get("text", "").strip())
     except Exception as exc:
         print(f"[transcription] error: {exc}")
         return ""

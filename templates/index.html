@@ -35,8 +35,7 @@
             <div class="user-name">{{ username }}</div>
           </div>
 
-          <a href="/profile" class="dropdown-item">View Profile</a>
-          <a href="/progress/" class="dropdown-item">Progress</a>
+          <a href="/profile" class="dropdown-item">Dashboard</a>
           <a href="/logout" class="dropdown-item danger">Logout</a>
         </div>
       </div>
@@ -81,11 +80,11 @@
       <h2>What would you like to do?</h2>
       <p id="role-display" style="color: var(--text-muted); margin-bottom: 20px;"></p>
 
-      <div style="display:flex; gap:16px; flex-wrap:wrap; justify-content:center; align-items: center;">
+      <div class="choice-actions">
         <form id="interview-form" method="post" action="/start_interview/">
           <input type="hidden" id="hidden-role" name="role">
           <input type="hidden" id="hidden-level" name="level">
-          <button type="submit" class="btn" style="width:220px; height: 44px;" id="btn-interview">
+          <button type="submit" class="btn" id="btn-interview">
             Take Voice Interview
           </button>
         </form>
@@ -93,7 +92,7 @@
         <form id="roadmap-form" method="post" action="/api/course/create">
           <input type="hidden" id="hidden-role-roadmap" name="role">
           <input type="hidden" id="hidden-designation" name="level">
-          <button type="submit" class="btn outline" style="width:220px; height: 44px;" id="btn-course">
+          <button type="submit" class="btn outline" id="btn-course">
             Generate Course
           </button>
         </form>

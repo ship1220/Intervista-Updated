@@ -9,6 +9,11 @@ import re
 import time
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
+
+from utils.logging_config import configure_app_logging, log_startup_banner
+
+configure_app_logging()
+
 from fastapi import FastAPI, Request, Form, Depends, HTTPException, UploadFile, File, Body
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -47,7 +52,12 @@ from user_skill_profile import (
     update_skill_vector,
     calculate_overall_score,
     record_interview_result,
+    score_answer_structure,
+    blend_dimension_score,
+    aggregate_dimension_scores,
+    build_dashboard_analytics,
 )
+from speech.transcription import normalize_transcript
 from core.llm.llm_service import LLMService
 from core.prompts.prompt_manager import PromptManager
 from services.rag.retriever import get_retriever
@@ -63,6 +73,12 @@ from speech.transcription import (
 from utils.rl_helpers import (
     get_state_id,
     calculate_reward,
+)
+from utils.bandit_logger import (
+    log_bandit_state,
+    log_reward_calculation,
+    log_course_generation_decision,
+    log_bandit_complete,
 )
 from services.rl.rl_service import ContextualBandit, INTERVIEW_ACTIONS, COURSE_ACTIONS
 from models import QTable, UserState
@@ -150,6 +166,22 @@ app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="stat
 
 logger = logging.getLogger(__name__)
 
+
+@app.middleware("http")
+async def log_http_requests(request: Request, call_next):
+    """Minimal request log (replaces verbose uvicorn access lines)."""
+    start = time.perf_counter()
+    response = await call_next(request)
+    elapsed_ms = (time.perf_counter() - start) * 1000
+    path = request.url.path
+    if path.startswith("/static"):
+        return response
+    print(
+        f"  {request.method} {path} → {response.status_code} ({elapsed_ms:.0f}ms)",
+        flush=True,
+    )
+    return response
+
 # Use PBKDF2-SHA512 as primary (no 72-byte limit), keep bcrypt for backward compatibility
 pwd_context = CryptContext(
     schemes=["pbkdf2_sha512", "bcrypt"],
@@ -171,29 +203,28 @@ report_store: dict[str, dict] = {}
 # ===========================================================================
 @app.on_event("startup")
 async def startup_rag_pipeline():
-    """Initialize RAG pipeline on application startup."""
+    """Initialize RAG pipeline quietly in the background."""
 
     global rag_pipeline
-    logger.info("Starting RAG pipeline initialization...")
+    from config.settings import settings
+
+    log_startup_banner(settings.api_host, settings.api_port)
 
     try:
         rag_pipeline = get_or_create_rag_pipeline()
         asyncio.create_task(initialize_rag_async())
-        logger.info("RAG pipeline core created; async initialization task started")
     except Exception:
         logger.exception("RAG pipeline startup failed")
         rag_pipeline = None
 
 
 async def initialize_rag_async():
-    """Initialize RAG asynchronously."""
+    """Initialize RAG asynchronously (errors only)."""
     if rag_pipeline is None:
-        logger.warning("RAG async initialization skipped because the pipeline instance is unavailable")
         return
 
     try:
         await initialize_rag()
-        logger.info("RAG pipeline initialized successfully")
     except Exception:
         logger.exception("RAG pipeline async initialization failed")
 
@@ -312,9 +343,12 @@ async def evaluate_content(role: str, level: str, questions_answers: list) -> di
     answers = []
     weak_topics = []
 
+    per_answer_dimensions: list[dict] = []
+
     for qa in questions_answers:
         question = qa.get("question", "")
-        answer = qa.get("answer", "")
+        answer = normalize_transcript(qa.get("answer", ""))
+        heuristics = score_answer_structure(answer, question)
 
         result = await evaluation_chain.invoke(
             {
@@ -373,6 +407,25 @@ async def evaluate_content(role: str, level: str, questions_answers: list) -> di
             weak_topics_raw = []
         weak_topics_list = [str(t).strip().lower() for t in weak_topics_raw if t]
         weak_topics_list = list(set(weak_topics_list))[:5]
+
+        dimension_scores = {
+            "relevance": blend_dimension_score(
+                parsed.get("relevance_score"), heuristics["relevance"]
+            ),
+            "explanation_depth": blend_dimension_score(
+                parsed.get("explanation_depth_score"), heuristics["explanation_depth"]
+            ),
+            "star_method": blend_dimension_score(
+                parsed.get("star_method_score"), heuristics["star_method"]
+            ),
+            "structured_thinking": blend_dimension_score(
+                parsed.get("structured_thinking_score"), heuristics["structured_thinking"]
+            ),
+            "problem_solving": blend_dimension_score(
+                parsed.get("problem_solving_score"), heuristics["problem_solving"]
+            ),
+        }
+        per_answer_dimensions.append(dimension_scores)
         
         # ============================================================
         # RL: EXTRACT CKFS METRICS (NEW)
@@ -390,6 +443,7 @@ async def evaluate_content(role: str, level: str, questions_answers: list) -> di
             "weaknesses": weaknesses,
             "ideal_answer": ideal_answer,
             "weak_topics": weak_topics_list,
+            "dimension_scores": dimension_scores,
             "_rl_metrics": rl_metrics,  # Internal use only, not sent to frontend
         }
         
@@ -402,6 +456,7 @@ async def evaluate_content(role: str, level: str, questions_answers: list) -> di
 
     scores = [a["score"] for a in answers] if answers else [0]
     avg_score = sum(scores) / len(scores) if scores else 0
+    dim_agg = aggregate_dimension_scores(per_answer_dimensions)
 
     return {
         "answers": answers,
@@ -411,6 +466,15 @@ async def evaluate_content(role: str, level: str, questions_answers: list) -> di
             "technical_score": round(avg_score),
             "communication_score": round(avg_score * 0.9),
             "overall_score": round(avg_score),
+            "relevance_score": dim_agg.get("relevance", round(avg_score)),
+            "depth_score": dim_agg.get("explanation_depth", round(avg_score * 0.9)),
+            "star_method_score": dim_agg.get("star_method", round(avg_score * 0.85)),
+            "structured_thinking_score": dim_agg.get(
+                "structured_thinking", round(avg_score * 0.9)
+            ),
+            "problem_solving_score": dim_agg.get(
+                "problem_solving", round(avg_score * 0.88)
+            ),
         },
     }
 
@@ -733,18 +797,10 @@ def index(request: Request, db: Session = Depends(get_db)):
     )
 
 @app.get("/progress", response_class=HTMLResponse)
-def progress_page(request: Request, db: Session = Depends(get_db)):
-    user = get_current_user(request, db)
-    if not user:
-        return RedirectResponse("/login")
-    skills = db.query(SkillProgress).filter(SkillProgress.user_id == user.id).all()
-    return templates.TemplateResponse(request, "progress.html", {"request": request, "username": user.username, "skills": skills})
-
-
-@app.get("/progress/", response_class=HTMLResponse)
-def progress_page_slash(request: Request, db: Session = Depends(get_db)):
-    """Support both /progress and /progress/ URLs."""
-    return progress_page(request, db)
+@app.get("/progress/")
+def progress_redirect(request: Request):
+    """Legacy progress page removed — send users to the profile dashboard."""
+    return RedirectResponse("/profile", status_code=303)
 
 # ===========================================================================
 # RESUME UPLOAD
@@ -1293,12 +1349,16 @@ async def api_interview_evaluate(request: Request, db: Session = Depends(get_db)
             },
             "content_analysis": {
                 "average_score": round(content_avg),
-
-                # values used by report.html
-                "relevance_score": aggregate.get("technical_score", round(content_avg)),
-                "depth_score": aggregate.get("communication_score", round(content_avg * 0.85)),
-                "star_method_score": aggregate.get("overall_score", round(content_avg)),
-             },
+                "relevance_score": aggregate.get("relevance_score", round(content_avg)),
+                "depth_score": aggregate.get("depth_score", round(content_avg)),
+                "star_method_score": aggregate.get("star_method_score", round(content_avg)),
+                "structured_thinking_score": aggregate.get(
+                    "structured_thinking_score", round(content_avg)
+                ),
+                "problem_solving_score": aggregate.get(
+                    "problem_solving_score", round(content_avg)
+                ),
+            },
             "detailed_answers": detailed_answers,
         }
 
@@ -1326,18 +1386,26 @@ async def api_interview_evaluate(request: Request, db: Session = Depends(get_db)
 
             # STEP 1: Compute state
             state_id = get_state_id(overall, len(weak_topics))
-            logger.info(f"[BANDIT] Computing state: score={overall:.1f}, weak_count={len(weak_topics)}, state_id={state_id}")
 
             # STEP 2: Get user state for previous score and session tracking
             user_state = db.query(UserState).filter(UserState.user_id == user.id).first()
             previous_score = float(user_state.avg_score) if user_state and user_state.avg_score is not None else overall
             prev_state_id = user_state.state_id if user_state else state_id
-            logger.info(f"[BANDIT] Previous avg_score={previous_score:.1f}, prev_state_id={prev_state_id}")
+            session_count = user_state.session_count if user_state else 0
 
-            # STEP 3: Select action using bandit
+            log_bandit_state(
+                state_id=state_id,
+                overall_score=overall,
+                weak_topics=weak_topics,
+                weak_count=len(weak_topics),
+                previous_score=previous_score,
+                prev_state_id=prev_state_id,
+                session_count=session_count,
+            )
+
+            # STEP 3: Select action using bandit (terminal logs inside select_action)
             course_learner = ContextualBandit(db=db, action_space="course")
             action = course_learner.select_action(state_id, user_state)
-            logger.info(f"[BANDIT] Selected action={action} for state_id={state_id}")
 
             # STEP 4: STRICT COURSE MAPPING - Action determines topics and difficulty
             def get_fundamentals(topics_list):
@@ -1368,22 +1436,18 @@ async def api_interview_evaluate(request: Request, db: Session = Depends(get_db)
             if action == "revision":
                 course_topics = get_fundamentals(weak_topics)
                 course_difficulty = "easy"
-                logger.info(f"[BANDIT] ACTION=revision → topics={course_topics}, difficulty={course_difficulty}")
 
             elif action == "easy":
                 course_topics = get_fundamentals(weak_topics)
                 course_difficulty = "easy"
-                logger.info(f"[BANDIT] ACTION=easy → topics={course_topics}, difficulty={course_difficulty}")
 
             elif action == "mixed":
                 course_topics = get_related_topics(weak_topics)
                 course_difficulty = "medium"
-                logger.info(f"[BANDIT] ACTION=mixed → topics={course_topics}, difficulty={course_difficulty}")
 
             elif action == "advanced":
                 course_topics = get_advanced_topics(weak_topics)
                 course_difficulty = "hard"
-                logger.info(f"[BANDIT] ACTION=advanced → topics={course_topics}, difficulty={course_difficulty}")
 
             else:
                 # Fallback
@@ -1391,8 +1455,13 @@ async def api_interview_evaluate(request: Request, db: Session = Depends(get_db)
                 course_difficulty = "medium"
                 logger.warning(f"[BANDIT] Unknown action={action}, using weak_topics")
 
+            course_topics = _normalize_course_topics(
+                role, course_topics, difficulty=course_difficulty, max_topics=6
+            )
+
             # STEP 5: ALWAYS run course generation with explicit topics and difficulty
             new_course_id = None
+            fallback_used = False
             try:
                 new_course_id = await create_course_internal(
                     user,
@@ -1404,17 +1473,16 @@ async def api_interview_evaluate(request: Request, db: Session = Depends(get_db)
                     topics=course_topics,
                     difficulty=course_difficulty,
                 )
-                logger.info(f"[BANDIT] Course created: id={new_course_id}, action={action}, topics={course_topics}, difficulty={course_difficulty}")
             except Exception as course_error:
                 logger.warning(
-                    f"[BANDIT] Course generation failed for action={action}: {str(course_error)}"
+                    f"Course generation failed for action={action}: {str(course_error)}"
                 )
                 new_course_id = None
 
             # Fallback: always try to create a course if first attempt failed
             if not new_course_id:
                 try:
-                    logger.info(f"[BANDIT] Attempting fallback course with revision action")
+                    fallback_used = True
                     new_course_id = await create_course_internal(
                         user,
                         role,
@@ -1422,12 +1490,13 @@ async def api_interview_evaluate(request: Request, db: Session = Depends(get_db)
                         weak_topics,
                         "revision",
                         db,
-                        topics=get_fundamentals(weak_topics),
+                        topics=_normalize_course_topics(
+                            role, get_fundamentals(weak_topics), difficulty="easy", max_topics=6
+                        ),
                         difficulty="easy",
                     )
-                    logger.info(f"[BANDIT] Fallback course created: id={new_course_id}")
                 except Exception as fallback_error:
-                    logger.warning(f"[BANDIT] Fallback course generation also failed: {str(fallback_error)}")
+                    logger.warning(f"Fallback course generation failed: {str(fallback_error)}")
                     new_course_id = None
 
             # STEP 6: Fetch course details for response
@@ -1444,11 +1513,31 @@ async def api_interview_evaluate(request: Request, db: Session = Depends(get_db)
             score_improvement = overall - previous_score  # range: -100 to +100
             reward = score_improvement / 100.0  # normalize to [-1, +1]
             reward = max(min(reward, 1.0), -1.0)  # clamp to [-1, 1]
-            logger.info(f"[BANDIT] Reward calculation: overall={overall:.1f} - previous={previous_score:.1f} = improvement={score_improvement:.1f} → normalized_reward={reward:.3f}")
 
-            # STEP 8: Update bandit with reward (no next_state needed)
+            log_reward_calculation(
+                overall_score=overall,
+                previous_score=previous_score,
+                score_improvement=score_improvement,
+                reward=reward,
+            )
+
+            course_title = None
+            if new_course_id:
+                _course_row = db.query(Course).filter(Course.id == new_course_id).first()
+                course_title = _course_row.title if _course_row else None
+
+            log_course_generation_decision(
+                action=action,
+                course_topics=course_topics,
+                course_difficulty=course_difficulty,
+                weak_topics=weak_topics,
+                new_course_id=new_course_id,
+                course_title=course_title,
+                fallback_used=fallback_used,
+            )
+
+            # STEP 8: Update bandit with reward (terminal logs inside update_action_value)
             course_learner.update_action_value(prev_state_id, action, reward)
-            logger.info(f"[BANDIT] Q-value updated: state={prev_state_id}, action={action}, reward={reward:.3f}")
 
             # STEP 9: Update user state for next session
             if user_state:
@@ -1490,12 +1579,14 @@ async def api_interview_evaluate(request: Request, db: Session = Depends(get_db)
                 "new_course_id": new_course_id,
             }
 
-            logger.info(
-                f"[BANDIT] COMPLETE: state={state_id}, action={action}, reward={reward:.3f}, "
-                f"course_id={new_course_id}, topics={course_topics}"
+            log_bandit_complete(
+                state_id=state_id,
+                action=action,
+                reward=reward,
+                new_course_id=new_course_id,
             )
         except Exception as e:
-            logger.warning(f"[BANDIT] RL course recommendation failed: {str(e)}", exc_info=True)
+            logger.warning(f"RL course recommendation failed: {str(e)}", exc_info=True)
             report["new_course_id"] = None
             report["recommended_action"] = "revision"
 
@@ -1604,19 +1695,31 @@ async def api_interview_evaluate(request: Request, db: Session = Depends(get_db)
         voice = report.get("voice_analysis", {})
         content = report.get("content_analysis", {})
 
-        interview_metrics = {
-            "relevance": _int(content.get("relevance_score", 0)),
-            "explanation_depth": _int(content.get("depth_score", 0)),
-            "problem_solving": _int(content.get("average_score", 0)),
-            "structured_thinking": _int(content.get("average_score", 0)),
-            "star_method": _int(content.get("star_method_score", 0)),
+        def _metric(v, fallback=0):
+            try:
+                return float(v)
+            except (TypeError, ValueError):
+                return float(fallback)
 
-            "clarity": _int(voice.get("clarity_score", 0)),
-            "confidence": _int(voice.get("confidence_score", 0)),
-            "engagement": _int(voice.get("engagement_score", 0)),
-            "speaking_pace": _int(voice.get("speaking_pace_wpm", 0)),
-            "filler_control": 100 - min(100, _int(voice.get("total_filler_words", 0))),
-}
+        interview_metrics = {
+            "relevance": _metric(content.get("relevance_score"), content_avg),
+            "explanation_depth": _metric(content.get("depth_score"), content_avg),
+            "problem_solving": _metric(
+                content.get("problem_solving_score"), content_avg
+            ),
+            "structured_thinking": _metric(
+                content.get("structured_thinking_score"), content_avg
+            ),
+            "star_method": _metric(content.get("star_method_score"), content_avg),
+            "clarity": _metric(voice.get("clarity_score", 0)),
+            "confidence": _metric(voice.get("confidence_score", 0)),
+            "engagement": _metric(voice.get("engagement_score", 0)),
+            "speaking_pace": _pace_to_skill_score(_metric(voice.get("speaking_pace_wpm", 0))),
+            "filler_control": max(
+                0.0,
+                100.0 - min(100.0, _metric(voice.get("total_filler_words", 0)) * 3),
+            ),
+        }
 
         # Update the stored skill vector using the interview metrics
         skill_vector = UserSkillVector(
@@ -1870,6 +1973,522 @@ def interview_report_page(
     )
 
 
+def _pace_to_skill_score(wpm: float) -> float:
+    """Map words-per-minute to 0–100 skill scale."""
+    if wpm <= 0:
+        return 50.0
+    if 120 <= wpm <= 165:
+        return 92.0
+    if 90 <= wpm < 120 or 165 < wpm <= 190:
+        return 72.0
+    return 55.0
+
+
+_COURSE_DIFFICULTY_LEVEL = {
+    "easy": "beginner — foundational concepts only; avoid advanced or expert topics",
+    "medium": "intermediate — applied practice, realistic scenarios, moderate depth",
+    "hard": "advanced — expert depth, system-level thinking, challenging exercises",
+}
+_COURSE_ACTION_LABEL = {
+    "revision": "Revision",
+    "easy": "Foundation",
+    "mixed": "Applied",
+    "advanced": "Mastery",
+}
+
+_COURSE_TOPIC_KEY_MAP = {
+    "structured_thinking": "Structured thinking",
+    "star_method": "STAR method",
+    "explanation_depth": "Answer depth",
+    "problem_solving": "Problem solving",
+    "relevance": "Answer relevance",
+    "clarity": "Clarity and conciseness",
+    "confidence": "Confidence and delivery",
+    "engagement": "Engagement",
+    "speaking_pace": "Speaking pace",
+    "filler_control": "Filler word control",
+}
+
+
+def _default_course_topics_for_role(role: str) -> list[str]:
+    role_clean = (role or "").strip()
+    role_low = role_clean.lower()
+    if "data analyst" in role_low or ("analyst" in role_low and "business" not in role_low):
+        return [
+            "SQL and joins",
+            "Data cleaning and wrangling",
+            "Exploratory data analysis",
+            "Metrics and experimentation",
+            "Dashboarding and storytelling",
+        ]
+    if "business analyst" in role_low:
+        return [
+            "Requirements gathering",
+            "Stakeholder communication",
+            "SQL and reporting",
+            "Process mapping",
+            "Metrics and KPIs",
+        ]
+    if "backend" in role_low:
+        return [
+            "API design and integration",
+            "Databases and transactions",
+            "Performance and caching",
+            "Authentication and security",
+            "System design fundamentals",
+        ]
+    if "frontend" in role_low:
+        return [
+            "Component architecture",
+            "State management",
+            "Performance optimization",
+            "Accessibility",
+            "API integration",
+        ]
+    if "full" in role_low and "stack" in role_low:
+        return [
+            "API design and integration",
+            "Databases and schema design",
+            "Frontend architecture",
+            "Authentication and security",
+            "System design fundamentals",
+        ]
+    if "machine learning" in role_low or "ml" in role_low:
+        return [
+            "Model evaluation and validation",
+            "Feature engineering",
+            "Statistics fundamentals",
+            "Data pipelines",
+            "Deployment and monitoring",
+        ]
+    if role_clean:
+        return [
+            f"{role_clean} fundamentals",
+            "Problem solving",
+            "Structured answering (STAR method)",
+            "Applied practice",
+            "Interview communication",
+        ]
+    return [
+        "Core fundamentals",
+        "Problem solving",
+        "Structured answering (STAR method)",
+        "Applied practice",
+        "Interview communication",
+    ]
+
+
+def _normalize_course_topics(
+    role: str,
+    topics: list[str] | None,
+    *,
+    difficulty: str = "medium",
+    max_topics: int = 6,
+) -> list[str]:
+    raw = topics if isinstance(topics, list) else []
+    cleaned: list[str] = []
+    for t in raw:
+        if t is None:
+            continue
+        s = str(t).strip()
+        if not s:
+            continue
+        key = s.strip().lower()
+        if key in _COURSE_TOPIC_KEY_MAP:
+            s = _COURSE_TOPIC_KEY_MAP[key]
+        elif key.replace(" ", "_") in _COURSE_TOPIC_KEY_MAP:
+            s = _COURSE_TOPIC_KEY_MAP[key.replace(" ", "_")]
+        else:
+            s_low = s.lower()
+            if any(k in s_low for k in ("clarity", "clear", "concise")):
+                s = "Clarity and conciseness"
+            elif any(k in s_low for k in ("structure", "structured", "star")):
+                s = "Structured answering (STAR method)"
+            elif any(k in s_low for k in ("confidence", "filler", "nervous", "delivery")):
+                s = "Confidence and delivery"
+            elif any(k in s_low for k in ("communication", "explain", "story", "storytelling")):
+                s = "Communication and storytelling"
+            elif any(k in s_low for k in ("sql", "database", "dbms")):
+                s = "SQL and relational databases"
+            elif "python" in s_low:
+                s = "Python programming"
+            elif any(k in s_low for k in ("data structure", "dsa", "algorithm")):
+                s = "Algorithms and data structures"
+            elif "system design" in s_low:
+                s = "System design fundamentals"
+            elif "api" in s_low:
+                s = "API design and integration"
+            elif "statistics" in s_low:
+                s = "Statistics fundamentals"
+            elif "machine learning" in s_low or " ml" in f" {s_low} ":
+                s = "Machine learning fundamentals"
+            if len(s) > 72:
+                s = s[:69].rstrip() + "..."
+        cleaned.append(s)
+
+    seen = set()
+    deduped: list[str] = []
+    for t in cleaned:
+        k = t.lower()
+        if k and k not in seen:
+            seen.add(k)
+            deduped.append(t)
+
+    if not deduped:
+        deduped = _default_course_topics_for_role(role)
+
+    placeholder = {"core concepts", "advanced concepts"}
+    if len(deduped) == 1 and deduped[0].strip().lower() in placeholder:
+        deduped = _default_course_topics_for_role(role)
+
+    if len(deduped) < 3:
+        extras = [
+            "Applied practice",
+            "Interview question drills",
+            "Common mistakes and fixes",
+        ]
+        for e in extras:
+            if len(deduped) >= 3:
+                break
+            if e.lower() not in {t.lower() for t in deduped}:
+                deduped.append(e)
+
+    if difficulty == "hard" and "System design fundamentals".lower() not in {
+        t.lower() for t in deduped
+    }:
+        deduped.append("System design fundamentals")
+
+    return deduped[: max(1, max_topics)]
+
+
+def _fallback_course_outline_json(
+    *,
+    title_hint: str,
+    role: str,
+    action: str,
+    difficulty: str,
+    course_topics: list[str],
+) -> dict:
+    topics = _normalize_course_topics(role, course_topics, difficulty=difficulty, max_topics=6)
+    modules: list[dict] = []
+    for t in topics[:5]:
+        modules.append(
+            {
+                "module_title": t,
+                "duration_minutes": 60,
+                "topics": [t],
+            }
+        )
+    if not modules:
+        modules = [
+            {"module_title": "Core fundamentals", "duration_minutes": 60, "topics": ["Core fundamentals"]}
+        ]
+    return {
+        "course_title": title_hint or "Adaptive Course",
+        "description": f"Adaptive {difficulty} learning path for {role} ({action}).",
+        "learning_objectives": [],
+        "modules": modules,
+        "assessments": [],
+    }
+
+
+
+def _make_adaptive_course_title(
+    db: Session,
+    user_id: int,
+    role: str,
+    action: str,
+    difficulty: str,
+    topics: list[str],
+) -> str:
+    """Deterministic, unique course title from RL decision + weak topics."""
+    action_label = _COURSE_ACTION_LABEL.get(action, action.title())
+    primary = (topics[0] if topics else role).strip()[:40]
+    base = f"{difficulty.title()} {action_label}: {primary}"
+    existing = {
+        row[0]
+        for row in db.query(Course.title).filter(Course.user_id == user_id).all()
+        if row[0]
+    }
+    title = base
+    n = 2
+    while title in existing:
+        title = f"{base} · Session {n}"
+        n += 1
+    return title
+
+
+def _enrich_profile_from_interviews(profile_data: dict, interviews: list) -> dict:
+    """Pull latest real scores from stored interview reports (avoid static 50s)."""
+    if not interviews:
+        profile_data["has_interview_data"] = False
+        profile_data["interview_count"] = 0
+        return profile_data
+
+    profile_data["has_interview_data"] = True
+    profile_data["interview_count"] = len(interviews)
+    latest = max(interviews, key=lambda iv: iv.date or datetime.min)
+    try:
+        report = json.loads(latest.report_json) if latest.report_json else {}
+    except Exception:
+        report = {}
+
+    sp = report.get("skill_profile") if isinstance(report.get("skill_profile"), dict) else {}
+    for group in ("interview_skills", "communication_skills", "technical_skills"):
+        if group in sp and isinstance(sp[group], dict):
+            base = profile_data.get(group) if isinstance(profile_data.get(group), dict) else {}
+            profile_data[group] = {**base, **sp[group]}
+
+    if sp.get("overall_score") is not None:
+        profile_data["overall_score"] = sp["overall_score"]
+    elif report.get("overall_score") is not None:
+        profile_data["overall_score"] = report["overall_score"]
+    elif latest.score is not None:
+        profile_data["overall_score"] = float(latest.score)
+
+    return profile_data
+
+
+def _compute_working_skill_gaps(profile_data: dict) -> list:
+    """Gaps from interview + communication skills only (excludes unused technical DSA/OS/CN)."""
+    gaps = []
+    for skills in (
+        profile_data.get("interview_skills") or {},
+        profile_data.get("communication_skills") or {},
+    ):
+        if not isinstance(skills, dict):
+            continue
+        for key, val in skills.items():
+            try:
+                score = float(val)
+            except (TypeError, ValueError):
+                score = 0
+            if score < 60:
+                gaps.append({
+                    "name": key.replace("_", " ").title(),
+                    "score": round(score, 1),
+                })
+    gaps.sort(key=lambda x: x["score"])
+    return gaps
+
+
+def _extract_report_weak_topics(report: dict) -> list[str]:
+    """Flatten weak topics from stored interview report JSON."""
+    topics: list[str] = []
+    weak = report.get("weak_topics")
+    if isinstance(weak, dict):
+        for value in weak.values():
+            if isinstance(value, list):
+                topics.extend(str(t).strip() for t in value if t)
+            elif value:
+                topics.append(str(value).strip())
+    elif isinstance(weak, list):
+        topics = [str(t).strip() for t in weak if t]
+
+    seen = set()
+    deduped = []
+    for t in topics:
+        key = t.lower()
+        if key and key not in seen:
+            seen.add(key)
+            deduped.append(t)
+    return deduped[:12]
+
+
+def _course_summary_from_entry(course_entry: dict) -> dict:
+    modules = course_entry.get("modules") or []
+    total = len(modules) or 1
+    completed = sum(1 for m in modules if m.get("is_completed"))
+    return {
+        "course_id": course_entry["course_id"],
+        "title": course_entry.get("title") or "Adaptive Course",
+        "level": course_entry.get("level"),
+        "progress_pct": round((completed / total) * 100),
+        "completed_modules": completed,
+        "total_modules": total,
+        "is_complete": completed == total and total > 0,
+        "modules": modules,
+        "created_at": course_entry.get("created_at"),
+        "course_url": f"/course/{course_entry['course_id']}",
+    }
+
+
+def _build_course_history(db: Session, user_id: int) -> list[dict]:
+    """Fetch all courses with module progress for the user."""
+    course_history = []
+    courses = (
+        db.query(Course)
+        .filter(Course.user_id == user_id)
+        .order_by(Course.created_at.asc())
+        .all()
+    )
+    for course in courses:
+        modules = (
+            db.query(Module)
+            .filter(Module.course_id == course.id)
+            .order_by(Module.order_index.asc())
+            .all()
+        )
+        module_entries = []
+        for module in modules:
+            attempt = (
+                db.query(ModuleAttempt)
+                .filter(
+                    ModuleAttempt.user_id == user_id,
+                    ModuleAttempt.module_id == module.id,
+                )
+                .order_by(ModuleAttempt.created_at.desc())
+                .first()
+            )
+            score = attempt.score if attempt else None
+            attempts = 0
+            is_passed = False
+            total_questions = attempt.total_questions if attempt else None
+            if attempt:
+                payload = attempt.answers
+                if isinstance(payload, dict):
+                    try:
+                        attempts = int(payload.get("attempt_count", 1))
+                    except Exception:
+                        attempts = 1
+                    is_passed = bool(payload.get("is_passed", False))
+                elif isinstance(payload, list):
+                    attempts = 1
+                    is_passed = bool(score is not None and score >= 2)
+
+            module_entries.append(
+                {
+                    "module_id": module.id,
+                    "title": module.title,
+                    "order_index": module.order_index,
+                    "is_unlocked": module.is_unlocked,
+                    "is_completed": module.is_completed,
+                    "score": score,
+                    "total_questions": total_questions,
+                    "is_passed": is_passed,
+                    "attempts": attempts,
+                }
+            )
+
+        course_history.append(
+            {
+                "course_id": course.id,
+                "title": course.title,
+                "role": course.role,
+                "level": course.level,
+                "status": course.status,
+                "created_at": course.created_at.strftime("%Y-%m-%d") if course.created_at else None,
+                "modules": module_entries,
+            }
+        )
+    return course_history
+
+
+def _build_unified_learning_timeline(
+    interviews: list,
+    course_history: list,
+    profile_row,
+) -> list[dict]:
+    """
+    Role → interviews → expandable adaptive course / follow-up details.
+    Courses not linked to an interview appear as standalone entries under the role.
+    """
+    from urllib.parse import quote
+
+    course_by_id = {c["course_id"]: c for c in course_history}
+    linked_course_ids: set[int] = set()
+    roles_map: dict[str, dict] = {}
+
+    def get_role_bucket(role: str) -> dict:
+        key = (role or "general").strip().lower() or "general"
+        display = (role or "General").strip()
+        if not display or display.lower() == "general":
+            display = "General"
+        else:
+            display = display.title()
+        if key not in roles_map:
+            roles_map[key] = {
+                "role_key": key,
+                "role_display": display,
+                "interviews": [],
+            }
+        return roles_map[key]
+
+    sorted_interviews = sorted(
+        interviews,
+        key=lambda iv: iv.date or datetime.min,
+        reverse=True,
+    )
+
+    for iv in sorted_interviews:
+        role = (iv.role or "General").strip()
+        bucket = get_role_bucket(role)
+        report: dict = {}
+        try:
+            report = json.loads(iv.report_json) if iv.report_json else {}
+        except Exception:
+            report = {}
+
+        rl = report.get("rl_metrics") or {}
+        new_course_id = report.get("new_course_id") or rl.get("new_course_id")
+        adaptive_course = None
+        if new_course_id and new_course_id in course_by_id:
+            adaptive_course = _course_summary_from_entry(course_by_id[new_course_id])
+            linked_course_ids.add(int(new_course_id))
+
+        weak_topics = _extract_report_weak_topics(report)
+        candidate = report.get("candidate_profile") or {}
+        level = candidate.get("level") or (
+            profile_row.current_designation if profile_row else "Junior"
+        )
+        role_for_url = candidate.get("role") or role
+
+        followup_url = None
+        if adaptive_course and adaptive_course["is_complete"]:
+            followup_url = (
+                f"/interview/start?role={quote(str(role_for_url))}"
+                f"&level={quote(str(level))}"
+                f"&course_id={adaptive_course['course_id']}"
+            )
+
+        summary = report.get("performance_summary") or ""
+        if len(summary) > 220:
+            summary = summary[:217].rstrip() + "..."
+
+        bucket["interviews"].append(
+            {
+                "id": iv.id,
+                "date": iv.date.strftime("%Y-%m-%d") if iv.date else "",
+                "date_display": iv.date.strftime("%b %d, %Y") if iv.date else "",
+                "score": round(float(iv.score), 1) if iv.score is not None else 0,
+                "weak_topics": weak_topics,
+                "summary_snippet": summary,
+                "rl_action": report.get("recommended_action") or rl.get("action"),
+                "rl_difficulty": rl.get("course_difficulty"),
+                "rl_topics": rl.get("course_topics") or [],
+                "rl_reward": rl.get("reward"),
+                "report_url": f"/interview-report/{iv.id}",
+                "adaptive_course": adaptive_course,
+                "followup_url": followup_url,
+                "level": level,
+                "role_for_url": role_for_url,
+            }
+        )
+
+    standalone_courses: list[dict] = []
+    for course in course_history:
+        if course["course_id"] in linked_course_ids:
+            continue
+        standalone_courses.append(_course_summary_from_entry(course))
+
+    timeline = sorted(
+        roles_map.values(),
+        key=lambda r: (r["interviews"][0]["date"] if r["interviews"] else ""),
+        reverse=True,
+    )
+    return timeline, standalone_courses
+
+
 @app.get("/profile", response_class=HTMLResponse)
 def profile_page(request: Request, db: Session = Depends(get_db)):
 
@@ -1883,41 +2502,18 @@ def profile_page(request: Request, db: Session = Depends(get_db)):
     # Ensure profile exists
     profile_row = get_or_create_user_profile(db, user)
 
-    # -------------------------------
-    # DEFAULT SKILL PROFILE (fallback)
-    # -------------------------------
     profile_data = {
-        "technical_skills": {
-            "dsa": 50,
-            "dbms": 50,
-            "operating_systems": 50,
-            "computer_networks": 50,
-            "system_design": 50,
-        },
-        "interview_skills": {
-            "relevance": 50,
-            "explanation_depth": 50,
-            "structured_thinking": 50,
-            "problem_solving": 50,
-            "star_method": 50,
-        },
-        "communication_skills": {
-            "clarity": 50,
-            "confidence": 50,
-            "engagement": 50,
-            "speaking_pace": 50,
-            "filler_control": 50,
-        },
-        "overall_score": 50
+        "interview_skills": {},
+        "communication_skills": {},
+        "technical_skills": {},
+        "overall_score": 0,
+        "interview_count": 0,
     }
-
-    # -------------------------------
-    # LOAD STORED SKILL PROFILE
-    # -------------------------------
     if profile_row.profile_json:
         try:
             loaded = json.loads(profile_row.profile_json)
-            profile_data.update(loaded)
+            if isinstance(loaded, dict):
+                profile_data.update(loaded)
         except Exception:
             pass
 
@@ -1952,16 +2548,6 @@ def profile_page(request: Request, db: Session = Depends(get_db)):
     )
 
     # -------------------------------
-    # GROUP BY ROLE (History section)
-    # -------------------------------
-    history_by_role = {}
-
-    for iv in interviews:
-       normalized_role = iv.role.strip().lower()   # ✅ normalize
-
-       history_by_role.setdefault(normalized_role, []).append(iv)
-
-    # -------------------------------
     # BUILD TIMELINE (for graphs)
     # -------------------------------
     timeline_by_role = {}
@@ -1986,94 +2572,24 @@ def profile_page(request: Request, db: Session = Depends(get_db)):
         else "Keep practicing interviews to improve your profile."
     )
 
-    # -------------------------------
-    # COURSE HISTORY
-    # -------------------------------
-    course_history = []
-    courses = (
-        db.query(Course)
-        .filter(Course.user_id == user.id)
-        .order_by(Course.created_at.asc())
-        .all()
+    profile_data = _enrich_profile_from_interviews(profile_data, interviews)
+
+    course_history = _build_course_history(db, user.id)
+    learning_timeline, standalone_courses = _build_unified_learning_timeline(
+        interviews, course_history, profile_row
     )
-    for course in courses:
-        modules = (
-            db.query(Module)
-            .filter(Module.course_id == course.id)
-            .order_by(Module.order_index.asc())
-            .all()
-        )
-        module_entries = []
-        for module in modules:
-            attempt = (
-                db.query(ModuleAttempt)
-                .filter(
-                    ModuleAttempt.user_id == user.id,
-                    ModuleAttempt.module_id == module.id
-                )
-                .order_by(ModuleAttempt.created_at.desc())
-                .first()
-            )
-            score = attempt.score if attempt else None
-            attempts = 0
-            answers = []
-            is_passed = False
-            total_questions = attempt.total_questions if attempt else None
-            if attempt:
-                payload = attempt.answers
-                if isinstance(payload, dict):
-                    try:
-                        attempts = int(payload.get("attempt_count", 1))
-                    except Exception:
-                        attempts = 1
-                    is_passed = bool(payload.get("is_passed", False))
-                    stored_answers = payload.get("answers", [])
-                    answers = stored_answers if isinstance(stored_answers, list) else []
-                elif isinstance(payload, list):
-                    attempts = 1
-                    answers = payload
-                    is_passed = bool(score is not None and score >= 2)
-
-            module_entries.append(
-                {
-                    "module_id": module.id,
-                    "title": module.title,
-                    "order_index": module.order_index,
-                    "is_unlocked": module.is_unlocked,
-                    "is_completed": module.is_completed,
-                    "score": score,
-                    "total_questions": total_questions,
-                    "is_passed": is_passed,
-                    "attempts": attempts,
-                    "answers": answers,
-                }
-            )
-
-        course_history.append(
-            {
-                "course_id": course.id,
-                "title": course.title,
-                "role": course.role,
-                "level": course.level,
-                "status": course.status,
-                "created_at": course.created_at.strftime("%Y-%m-%d") if course.created_at else None,
-                "modules": module_entries,
-            }
-        )
-
-    logger.info("Course history built for user_id=%s courses=%s", user.id, len(course_history))
+    dashboard_analytics = build_dashboard_analytics(profile_data, interviews)
 
     return templates.TemplateResponse(request, "profile.html", {
             "request": request,
             "username": user.username,
             "user_profile": profile_row,
             "skill_profile": profile_data,
-            "extracted_skills": extracted_skills,
-            "skill_gaps": skill_gaps,
-            "interview_history_by_role": history_by_role,
+            "dashboard": dashboard_analytics,
             "timeline_by_role": timeline_by_role,
             "improvement_message": improvement_message,
-            "course_history": course_history
+            "learning_timeline": learning_timeline,
+            "standalone_courses": standalone_courses,
         },
     )
 
@@ -2260,40 +2776,52 @@ async def create_course(
     
     try:
         # Generate outline using LLM
+        title_hint = _make_adaptive_course_title(
+            db, user.id, role, "manual", "medium", [role]
+        )
         outline_prompt_input = {
             "skill": role,
             "level": level,
-            "duration_hours": 20
+            "duration_hours": 20,
+            "target_difficulty": _COURSE_DIFFICULTY_LEVEL["medium"],
+            "bandit_action": "manual",
+            "title_hint": title_hint,
+            "strict_requirements": "User-initiated course from dashboard.",
         }
-        
-        # ===== OUTLINE =====
+
         outline_prompt = prompt_manager.get_prompt("course_outline", **outline_prompt_input)
-        outline_text = await llm_service.invoke(outline_prompt)
+        outline_text = await llm_service.invoke(outline_prompt, json_mode=True)
         
         # Parse LLM response (extract JSON)
+        outline_json = None
         try:
             outline_json = extract_json(outline_text)
 
-        except Exception as e:
-
-            match = re.search(r"\{.*\}", outline_text, re.DOTALL)
-
+        except Exception:
+            match = re.search(r"\{.*\}", outline_text or "", re.DOTALL)
             if match:
                 try:
-                   outline_json = json.loads(match.group(0))
+                    outline_json = json.loads(match.group(0))
                 except Exception:
-                    raise HTTPException(status_code=500, detail="Invalid outline JSON format")
-            else:
-                raise HTTPException(status_code=500, detail="No JSON found in outline response")
+                    outline_json = None
+
+        if not isinstance(outline_json, dict):
+            outline_json = _fallback_course_outline_json(
+                title_hint=title_hint,
+                role=role,
+                action="manual",
+                difficulty="medium",
+                course_topics=[role],
+            )
         
         # Create Course record
         course = Course(
             user_id=user.id,
             role=role,
-            title=outline_json.get("course_title", f"{level.title()} {role} Course"),
+            title=title_hint,
             description=outline_json.get("description", ""),
             level=level,
-            status="generated"
+            status="generated",
         )
         db.add(course)
         db.flush()  # Get course.id
@@ -2402,53 +2930,67 @@ async def create_course_internal(
     # Use explicit topics if provided, otherwise use weak_topics
     course_topics = topics if topics else weak_topics
     course_topics = [str(t).strip() for t in course_topics if str(t).strip()]
+    course_topics = _normalize_course_topics(role, course_topics, difficulty=difficulty, max_topics=6)
     topics_text = ", ".join(course_topics)
+    target_difficulty = _COURSE_DIFFICULTY_LEVEL.get(difficulty, difficulty)
+    title_hint = _make_adaptive_course_title(
+        db, user.id, role, action, difficulty, course_topics
+    )
 
-    prompt = f"""
-Generate a course outline.
-
-COURSE PARAMETERS:
-- Action: {action}
-- Difficulty Level: {difficulty}
-- Topics to Cover: {topics_text}
-
-STRICT REQUIREMENTS:
-- FIRST 2 modules MUST directly cover these topics: {topics_text}
-- Each topic MUST appear explicitly in module titles
-- Set difficulty to {difficulty.upper()} throughout the course
-- Do NOT generalize or skip required topics
-- Remaining modules can expand related concepts
-- Module difficulty should match: {difficulty}
+    strict_block = f"""
+MANDATORY:
+- Cover these topics in the first 2 modules: {topics_text}
+- Curriculum difficulty: {difficulty.upper()} — {target_difficulty}
+- Learning path type: {action}
+- Module titles must name the weak topics explicitly
+- Do NOT create introductory/beginner content if difficulty is hard
+- Do NOT create expert-only content if difficulty is easy
 """
 
     outline_prompt_input = {
         "skill": role,
         "level": level,
         "duration_hours": 20,
-        "strict_requirements": prompt,
+        "target_difficulty": target_difficulty,
+        "bandit_action": action,
+        "title_hint": title_hint,
+        "strict_requirements": strict_block,
     }
 
     outline_prompt = prompt_manager.get_prompt("course_outline", **outline_prompt_input)
-    outline_text = await llm_service.invoke(outline_prompt)
+    outline_text = await llm_service.invoke(outline_prompt, json_mode=True)
 
+    outline_json = None
     try:
         outline_json = extract_json(outline_text)
     except Exception:
-        match = re.search(r"\{.*\}", outline_text, re.DOTALL)
+        match = re.search(r"\{.*\}", outline_text or "", re.DOTALL)
         if match:
             try:
                 outline_json = json.loads(match.group(0))
             except Exception:
-                return None
-        else:
-            return None
+                outline_json = None
+
+    if not isinstance(outline_json, dict):
+        outline_json = _fallback_course_outline_json(
+            title_hint=title_hint,
+            role=role,
+            action=action,
+            difficulty=difficulty,
+            course_topics=course_topics,
+        )
+
+    final_title = title_hint
+    llm_title = (outline_json.get("course_title") or "").strip()
+    if llm_title and llm_title.lower() not in ("course", "learning path", "training course"):
+        final_title = llm_title
 
     course = Course(
         user_id=user.id,
         role=role,
-        title=outline_json.get("course_title", f"{level.title()} {role} - {action.title()} Course"),
+        title=final_title,
         description=outline_json.get("description", ""),
-        level=level,
+        level=difficulty,
         status="generated",
     )
     db.add(course)
@@ -2456,7 +2998,14 @@ STRICT REQUIREMENTS:
 
     outline_modules = outline_json.get("modules", [])
     if not isinstance(outline_modules, list) or len(outline_modules) == 0:
-        outline_modules = [{"module_title": t, "topics": [t]} for t in course_topics[:3]]
+        outline_modules = [{"module_title": t, "topics": [t]} for t in course_topics[:5]]
+    if len(outline_modules) < 3:
+        existing_titles = {str(m.get("module_title", "")).strip().lower() for m in outline_modules if isinstance(m, dict)}
+        for extra in ("Applied practice", "Interview question drills", "Common mistakes and fixes"):
+            if len(outline_modules) >= 3:
+                break
+            if extra.lower() not in existing_titles:
+                outline_modules.append({"module_title": extra, "topics": [extra]})
 
     total_modules = len(outline_modules)
     for idx, mod_data in enumerate(outline_modules):

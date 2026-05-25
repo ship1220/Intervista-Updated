@@ -1,630 +1,331 @@
 <!DOCTYPE html>
-
 <html lang="en">
-
 <head>
-
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-
-<title>Your Profile</title>
-
+<title>Learning Dashboard</title>
 <link rel="stylesheet" href="/static/style.css">
-
+<link rel="stylesheet" href="/static/profile-dashboard.css">
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-
 </head>
+
+<body class="profile-dashboard">
+
 <nav class="navbar">
   <div class="nav-container">
-
     <h2 class="logo">
       <img src="/static/new_logo.png" alt="Intervista AI logo" class="logo-img">
       INTERVISTA
     </h2>
-
-   <div class="nav-links">
-  <a href="/">Home</a>
-  <a href="/#features">Features</a>
-  <a href="/#flow">How it Works</a>
-  <a href="/#contact">Contact</a>
-</div>
-
-      <!-- User menu -->
-      <div class="user-menu">
-        <button class="user-avatar" id="userAvatar">
-          <span class="avatar-circle">{{ username[:1] | upper }}</span>
-        </button>
-
-        <div class="user-dropdown" id="userDropdown">
-          <div class="user-dropdown-header">
-            <div class="user-name">{{ username }}</div>
-          </div>
-
-          <a href="/home/" class="dropdown-item">Dashboard</a>
-          <a href="/progress/" class="dropdown-item">Progress</a>
-          <a href="/logout" class="dropdown-item danger">Logout</a>
+    <div class="nav-links">
+      <a href="/index">Home</a>
+      <a href="/#features">Features</a>
+      <a href="/#flow">How it Works</a>
+      <a href="/#contact">Contact</a>
+    </div>
+    <div class="user-menu">
+      <button class="user-avatar" id="userAvatar" type="button">
+        <span class="avatar-circle">{{ username[:1] | upper }}</span>
+      </button>
+      <div class="user-dropdown" id="userDropdown">
+        <div class="user-dropdown-header">
+          <div class="user-name">{{ username }}</div>
         </div>
+        <a href="/profile" class="dropdown-item">Dashboard</a>
+        <a href="/logout" class="dropdown-item danger">Logout</a>
       </div>
-
     </div>
   </div>
 </nav>
 
-
-<body>
-
 <header class="page-header">
-
-<h1>Your Profile</h1>
-
+  <h1>Learning Dashboard</h1>
+  <p class="page-subtitle">Interview → weaknesses → adaptive course → follow-up</p>
 </header>
 
-<main>
-
-<!-- ================================================= -->
-
-<!-- BASIC INFO -->
-
-<!-- ================================================= -->
-
-<section class="card">
-
-<h2>Basic Information</h2>
-
-<div class="profile-info">
-
-<div class="info-row">
-<span class="label">Full Name</span>
-<span class="value">{{ user_profile.first_name or username }} {{ user_profile.last_name or "" }}</span>
-</div>
-
-
-<div class="info-row">
-<span class="label">Role Applied For</span>
-<span class="value">{{ user_profile.role_applied_for or "Not specified" }}</span>
-</div>
-
-<div class="info-row">
-<span class="label">Current Designation</span>
-<span class="value">{{ user_profile.current_designation or "Not specified" }}</span>
-</div>
-
-<div class="resume-section">
-
-<strong>Resume</strong><br>
-
-{% if user_profile.resume_file_path %} <a href="/{{ user_profile.resume_file_path }}" class="btn small-btn" download>Download Resume</a>
-{% endif %}
-
-<form action="/update-resume" method="post" enctype="multipart/form-data">
-<input type="file" name="file" required>
-<button type="submit" class="btn small-btn">Upload New Resume</button>
-</form>
-
-</div>
-
-</div>
-
-</section>
-
-<!-- ================================================= -->
-
-<!-- INTERVIEW READINESS -->
-
-<!-- ================================================= -->
-
-<section class="card">
-
-<h2>Interview Readiness</h2>
-
-<div class="skill-dashboard">
-
-<div class="skill-dashboard-row">
-
-<div class="skill-dashboard-card">
-
-<h3>Overall Score</h3>
-
-<div class="score-box">
-<span id="overall-score">0</span>
-</div>
-
-</div>
-
-<div class="skill-dashboard-card">
-
-<h3>Skill Radar</h3>
-
-<canvas id="skillRadar"></canvas>
-
-</div>
-
-</div>
-
-</div>
-
-</section>
-
-<!-- ================================================= -->
-
-<!-- SKILL BREAKDOWN -->
-
-<!-- ================================================= -->
-
-<section class="card">
-
-<h2>Skill Breakdown</h2>
-
-<div class="skill-breakdown">
-
-<div class="breakdown-column">
-<h3>Technical</h3>
-<div id="technical-skills"></div>
-</div>
-
-<div class="breakdown-column">
-<h3>Interview</h3>
-<div id="interview-skills"></div>
-</div>
-
-<div class="breakdown-column">
-<h3>Communication</h3>
-<div id="communication-skills"></div>
-</div>
-
-</div>
-
-<!-- ================================================= -->
-<!-- SKILL GAPS -->
-<!-- ================================================= -->
-
-<section class="card">
-
-<h2>Top Skill Gaps</h2>
-
-<div id="top-skill-gaps">
-
-{% if top_skill_gaps %}
-
-{% for gap in top_skill_gaps %}
-
-<div class="skill-row">
-
-<div class="skill-label">{{ gap.name }}</div>
-
-<div class="skill-bar">
-<div class="skill-fill"
-style="width:{{ gap.score }}%;
-background:
-{% if gap.score < 30 %}#e74c3c
-{% elif gap.score < 50 %}#f39c12
-{% else %}#3498db
-{% endif %};">
-</div>
-</div>
-
-<div class="skill-percent">{{ gap.score }}%</div>
-
-</div>
-
-{% endfor %}
-
-{% else %}
-
-<p>No skill gaps detected — all skills above 60%!</p>
-
-{% endif %}
-
-</div>
-
-</section>
-
-<!-- ================================================= -->
-
-<!-- IMPROVEMENT MESSAGE -->
-
-<!-- ================================================= -->
-
-<section class="card">
-
-<h2>Skill Improvement</h2>
-
-<p id="improvementMessage">
-{{ improvement_message or "Keep practicing interviews to improve your profile." }}
-</p>
-
-</section>
-
-<!-- ================================================= -->
-
-<!-- INTERVIEW HISTORY -->
-
-<!-- ================================================= -->
-
-<section class="card">
-
-<h2>Interview History</h2>
-
-{% if interview_history_by_role %}
-
-{% for role, interviews in interview_history_by_role.items() %}
-
-<details class="history-dropdown">
-
-<summary>{{ role }}</summary>
-
-<ul>
-
-{% for iv in interviews %}
-
-<li>
-<a href="/interview-report/{{ iv.id }}">
-Interview — {{ iv.date.strftime("%Y-%m-%d") }}
-(Score: {{ "%.1f"|format(iv.score) }})
-</a>
-</li>
-
-{% endfor %}
-
-</ul>
-
-</details>
-
-{% endfor %}
-
-{% else %}
-
-<p>No interviews recorded yet.</p>
-
-{% endif %}
-
-</section>
-
-<!-- ================================================= -->
-
-<!-- COURSE HISTORY -->
-
-<!-- ================================================= -->
-
-<section class="card">
-
-<h2>Course History</h2>
-
-{% if course_history %}
-
-{% for course in course_history %}
-
-<details class="history-dropdown">
-
-<summary>
-<a href="/course/{{ course.course_id }}">{{ course.title or (course.role ~ " Course") }}</a>
-{% if course.level %}(Level: {{ course.level }}){% endif %}
-</summary>
-
-<p>
-Role: {{ course.role or "N/A" }} |
-Status: {{ course.status or "N/A" }} |
-Created: {{ course.created_at or "N/A" }}
-</p>
-
-<ul>
-{% for module in course.modules %}
-<li>
-{{ module.order_index + 1 }}. {{ module.title }} —
-{% if module.is_completed %}Completed{% else %}In Progress{% endif %}
-| Attempts: {{ module.attempts }}
-| Score: {% if module.score is not none %}{{ module.score }}{% if module.total_questions %}/{{ module.total_questions }}{% endif %}{% else %}N/A{% endif %}
-| Passed: {% if module.is_passed %}Yes{% else %}No{% endif %}
-</li>
-{% endfor %}
-</ul>
-
-</details>
-
-{% endfor %}
-
-{% else %}
-
-<p>No courses recorded yet.</p>
-
-{% endif %}
-
-</section>
+<main class="dashboard-main">
+
+  <!-- 1. Profile header -->
+  <section class="dash-section" id="profile-header">
+    <h2><span class="sec-num">1</span> Profile</h2>
+    <div class="profile-header-grid">
+      <div class="profile-identity">
+        <div class="profile-name">{{ user_profile.first_name or username }} {{ user_profile.last_name or "" }}</div>
+        <div class="profile-meta-row">
+          <div class="meta-pill">
+            <strong>Target role</strong>
+            {{ user_profile.role_applied_for or "Not set" }}
+          </div>
+          <div class="meta-pill">
+            <strong>Level</strong>
+            {{ user_profile.current_designation or "Not set" }}
+          </div>
+        </div>
+      </div>
+      <div class="profile-resume-actions">
+        {% if user_profile.resume_file_path %}
+        <a href="/{{ user_profile.resume_file_path }}" class="btn small-btn" download>Download resume</a>
+        {% endif %}
+        <form action="/update-resume" method="post" enctype="multipart/form-data">
+          <input type="file" name="file" required accept=".pdf,.docx" aria-label="Resume file">
+          <button type="submit" class="btn small-btn outline-btn">Update resume</button>
+        </form>
+      </div>
+    </div>
+  </section>
+
+  <!-- 2. Skill snapshot (high-level only) -->
+  <section class="dash-section" id="skill-snapshot">
+    <h2><span class="sec-num">2</span> Skill Snapshot</h2>
+    {% if dashboard.has_data and dashboard.snapshot %}
+    <div class="snapshot-kpi-grid">
+      {% for item in dashboard.snapshot %}
+      <div class="snapshot-kpi snapshot-kpi--{{ item.kind }}">
+        <span class="snapshot-kpi-value" data-kind="{{ item.kind }}">{{ item.value }}{% if item.kind != 'count' and item.kind != 'primary' %}%{% endif %}</span>
+        <span class="snapshot-kpi-label">{{ item.label }}</span>
+      </div>
+      {% endfor %}
+    </div>
+    {% else %}
+    <p class="empty-state">Complete a voice interview to unlock your readiness overview.</p>
+    <a href="/index" class="btn small-btn">Start interview</a>
+    {% endif %}
+  </section>
+
+  <!-- 3. Skill analysis + focus -->
+  <section class="dash-section" id="skill-analysis">
+    <h2><span class="sec-num">3</span> Skill Analysis &amp; Focus</h2>
+    {% if dashboard.has_data %}
+    <div class="analysis-split">
+      <div class="analysis-table-wrap">
+        <h3 class="subheading">Detailed breakdown</h3>
+        <table class="analysis-table">
+          <thead>
+            <tr>
+              <th>Dimension</th>
+              <th>Area</th>
+              <th>Score</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in dashboard.analysis %}
+            <tr class="tier-{{ row.tier }}">
+              <td>{{ row.label }}</td>
+              <td>{{ row.group }}</td>
+              <td><strong>{{ row.value }}%</strong></td>
+              <td><span class="tier-badge tier-badge--{{ row.tier }}">{{ row.tier }}</span></td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      <div class="focus-panel">
+        <h3 class="subheading">Focus areas</h3>
+        {% if dashboard.focus_areas %}
+        <ul class="focus-actions">
+          {% for item in dashboard.focus_areas %}
+          <li>
+            <div class="focus-actions-head">
+              <span class="focus-actions-name">{{ item.name }}</span>
+              <span class="focus-actions-score">{{ item.score }}%</span>
+            </div>
+            <p class="focus-actions-text">{{ item.action }}</p>
+          </li>
+          {% endfor %}
+        </ul>
+        {% else %}
+        <p class="empty-state">No critical gaps — keep practicing to maintain momentum.</p>
+        {% endif %}
+      </div>
+    </div>
+    {% else %}
+    <p class="empty-state">Skill analysis appears after your first evaluated interview.</p>
+    {% endif %}
+  </section>
+
+  <!-- 4. Performance -->
+  <section class="dash-section" id="performance">
+    <h2><span class="sec-num">4</span> Performance Over Time</h2>
+    {% if timeline_by_role and timeline_by_role | length > 0 %}
+    <div class="chart-toolbar">
+      <label for="roleSelector">Role</label>
+      <select id="roleSelector" aria-label="Select role"></select>
+    </div>
+    <div class="chart-wrap">
+      <canvas id="performanceChart"></canvas>
+    </div>
+    {% else %}
+    <p class="empty-state">Interview score trends will display here.</p>
+    {% endif %}
+  </section>
+
+  <!-- 5. Unified history -->
+  <section class="dash-section" id="learning-timeline">
+    <h2><span class="sec-num">5</span> Learning History</h2>
+    <p class="timeline-intro">Expand an interview to see the report, weak topics, RL-generated course, and follow-up path.</p>
+
+    {% if learning_timeline %}
+    {% for role_group in learning_timeline %}
+    <div class="role-group">
+      <div class="role-group-title">{{ role_group.role_display }}</div>
+
+      {% for iv in role_group.interviews %}
+      <details class="tl-interview">
+        <summary>
+          <span class="tl-date-badge">{{ iv.date_display }}</span>
+          <div class="tl-summary-main">
+            <div class="tl-summary-title">Mock interview</div>
+            <div class="tl-summary-sub">
+              {% if iv.rl_action %}Path: {{ iv.rl_action }}{% if iv.rl_difficulty %} · {{ iv.rl_difficulty }}{% endif %}{% else %}Evaluated{% endif %}
+            </div>
+          </div>
+          <span class="tl-score-pill {% if iv.score >= 70 %}tl-score-pill--high{% elif iv.score >= 50 %}tl-score-pill--mid{% else %}tl-score-pill--low{% endif %}">
+            {{ iv.score }}/100
+          </span>
+        </summary>
+        <div class="tl-body">
+          <div class="tl-block">
+            <h4>Report</h4>
+            <div class="tl-actions">
+              <a href="{{ iv.report_url }}" class="btn small-btn">View report</a>
+            </div>
+            {% if iv.summary_snippet %}
+            <p class="tl-summary-text">{{ iv.summary_snippet }}</p>
+            {% endif %}
+          </div>
+          {% if iv.weak_topics %}
+          <div class="tl-block">
+            <h4>Weak topics</h4>
+            <div class="tl-tags">
+              {% for topic in iv.weak_topics %}
+              <span class="tl-tag">{{ topic }}</span>
+              {% endfor %}
+            </div>
+          </div>
+          {% endif %}
+          {% if iv.adaptive_course %}
+          <div class="tl-block">
+            <h4>Adaptive course (RL)</h4>
+            <div class="tl-course-card">
+              <div class="tl-course-head">
+                <a href="{{ iv.adaptive_course.course_url }}" class="tl-course-title">{{ iv.adaptive_course.title }}</a>
+                <span class="tl-tag tl-tag--blue">{{ iv.adaptive_course.progress_pct }}%</span>
+              </div>
+              <div class="progress-track">
+                <div class="progress-fill{% if iv.adaptive_course.is_complete %} progress-fill--complete{% endif %}"
+                     style="width:{{ iv.adaptive_course.progress_pct }}%;"></div>
+              </div>
+              <div class="tl-actions">
+                <a href="{{ iv.adaptive_course.course_url }}" class="btn small-btn outline-btn">Open course</a>
+                {% if iv.followup_url %}
+                <a href="{{ iv.followup_url }}" class="btn small-btn">Follow-up interview</a>
+                {% endif %}
+              </div>
+            </div>
+          </div>
+          {% endif %}
+        </div>
+      </details>
+      {% endfor %}
+    </div>
+    {% endfor %}
+
+    {% if standalone_courses %}
+    <div class="standalone-container">
+      <h3 class="standalone-heading">Self-paced courses</h3>
+      <div class="standalone-list">
+        {% for course in standalone_courses %}
+        <div class="standalone-card">
+          <div class="standalone-card-main">
+            <span class="standalone-card-title">{{ course.title }}</span>
+            <span class="standalone-card-progress">{{ course.progress_pct }}% complete</span>
+          </div>
+          <a href="{{ course.course_url }}" class="btn small-btn">Open course</a>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+    {% endif %}
+
+    {% else %}
+    <div class="empty-state-box">
+      <p class="empty-state">No interviews yet. Start a mock interview to begin your adaptive path.</p>
+      <a href="/index" class="btn small-btn">Go to Home</a>
+    </div>
+    {% endif %}
+  </section>
 
 </main>
 
 <script>
-
-/* ============================= */
-/* DATA FROM BACKEND */
-/* ============================= */
-
-const skillProfile = {{ skill_profile | tojson | safe }} || {};
 const timelineByRole = {{ timeline_by_role | tojson | safe }} || {};
 
-
-/* ============================= */
-/* HELPERS */
-/* ============================= */
-
-function clamp(v){
-return Math.max(0,Math.min(100,v||0));
-}
-
-function getColor(v){
-
-if(v < 40) return "#e74c3c";
-if(v < 70) return "#f39c12";
-return "#2ecc71";
-
-}
-
-
-/* ============================= */
-/* PROGRESS BAR */
-/* ============================= */
-
-function progressBar(label,value){
-
-const row=document.createElement("div")
-row.className="skill-row"
-
-const l=document.createElement("div")
-l.className="skill-label"
-l.textContent=label
-
-const bar=document.createElement("div")
-bar.className="skill-bar"
-
-const fill=document.createElement("div")
-fill.className="skill-fill"
-fill.style.width=clamp(value)+"%"
-fill.style.background=getColor(value)
-
-const p=document.createElement("div")
-p.className="skill-percent"
-p.textContent=clamp(value)+"%"
-
-bar.appendChild(fill)
-
-row.appendChild(l)
-row.appendChild(bar)
-row.appendChild(p)
-
-return row
-
-}
-
-
-/* ============================= */
-/* SKILL BREAKDOWN */
-/* ============================= */
-
-function renderBreakdown(){
-
-const tech = skillProfile.technical_skills || {};
-const inter = skillProfile.interview_skills || {};
-const comm = skillProfile.communication_skills || {};
-
-const t = document.getElementById("technical-skills");
-const i = document.getElementById("interview-skills");
-const c = document.getElementById("communication-skills");
-
-// ✅ clear before appending
-t.innerHTML = "";
-i.innerHTML = "";
-c.innerHTML = "";
-
-t.appendChild(progressBar("DSA",tech.dsa))
-t.appendChild(progressBar("DBMS",tech.dbms))
-t.appendChild(progressBar("Operating Systems",tech.operating_systems))
-t.appendChild(progressBar("Computer Networks",tech.computer_networks))
-t.appendChild(progressBar("System Design",tech.system_design))
-
-i.appendChild(progressBar("Relevance",inter.relevance))
-i.appendChild(progressBar("Explanation Depth",inter.explanation_depth))
-i.appendChild(progressBar("Structured Thinking",inter.structured_thinking))
-i.appendChild(progressBar("Problem Solving",inter.problem_solving))
-i.appendChild(progressBar("STAR Method",inter.star_method))
-
-c.appendChild(progressBar("Clarity",comm.clarity))
-c.appendChild(progressBar("Confidence",comm.confidence))
-c.appendChild(progressBar("Engagement",comm.engagement))
-c.appendChild(progressBar("Speaking Pace",comm.speaking_pace))
-c.appendChild(progressBar("Filler Control",comm.filler_control))
-}
-
-/* ============================= */
-/* RADAR CHART */
-/* ============================= */
-
-function renderRadar(){
-
-const ctx=document.getElementById("skillRadar")
-
-if(!ctx) return
-
-const tech=skillProfile.technical_skills||{}
-const comm=skillProfile.communication_skills||{}
-const inter=skillProfile.interview_skills||{}
-
-if(window._radarChart) window._radarChart.destroy()
-
-window._radarChart = new Chart(ctx,{
-
-type:"radar",
-
-data:{
-labels:[
-"DSA",
-"DBMS",
-"OS",
-"Networks",
-"System Design",
-"Problem Solving",
-"Clarity",
-"Confidence"
-],
-
-datasets:[{
-
-data:[
-clamp(tech.dsa),
-clamp(tech.dbms),
-clamp(tech.operating_systems),
-clamp(tech.computer_networks),
-clamp(tech.system_design),
-clamp(inter.problem_solving),
-clamp(comm.clarity),
-clamp(comm.confidence)
-],
-
-backgroundColor:"rgba(54,162,235,0.2)",
-borderColor:"rgba(54,162,235,1)",
-pointBackgroundColor:"rgba(54,162,235,1)"
-
-}]
-
-},
-
-options:{
-scales:{
-r:{
-min:0,
-max:100,
-ticks:{stepSize:20}
-}
-},
-plugins:{
-legend:{display:false}
-}
-}
-
-})
-
-}
-
-
-/* ============================= */
-/* PERFORMANCE TIMELINE */
-/* ============================= */
-function renderTimeline(role){
-
-const data = timelineByRole[role] || [];
-
-if(data.length === 0){
-    console.log("No data for role:", role);
-    return;
-}
-
-const labels = data.map(d => d.date);
-const scores = data.map(d => d.score);
-
-const ctx = document.getElementById("performanceChart");
-
-if(window._timelineChart) window._timelineChart.destroy();
-
-window._timelineChart = new Chart(ctx, {
+function renderTimeline(role) {
+  const data = timelineByRole[role] || [];
+  if (!data.length) return;
+  const ctx = document.getElementById("performanceChart");
+  if (!ctx) return;
+  if (window._timelineChart) window._timelineChart.destroy();
+  window._timelineChart = new Chart(ctx, {
     type: "line",
     data: {
-        labels: labels,
-        datasets: [{
-            label: role + " Performance",
-            data: scores,
-            tension: 0.3,
-            fill: true
-        }]
+      labels: data.map((d) => d.date),
+      datasets: [{
+        data: data.map((d) => d.score),
+        borderColor: "#2563eb",
+        backgroundColor: "rgba(37, 99, 235, 0.08)",
+        fill: true,
+        tension: 0.35,
+      }],
     },
     options: {
-        scales: {
-            y: { min: 0, max: 100 }
-        }
-    }
-});
+      responsive: true,
+      maintainAspectRatio: false,
+      scales: { y: { min: 0, max: 100 } },
+      plugins: { legend: { display: false } },
+    },
+  });
 }
 
-function initTimeline(){
-
-const selector = document.getElementById("roleSelector");
-const roles = Object.keys(timelineByRole);
-
-if(roles.length === 0){
-    console.log("No timeline data");
-    return;
-}
-
-roles.forEach(role => {
+function initTimeline() {
+  const selector = document.getElementById("roleSelector");
+  if (!selector) return;
+  const roles = Object.keys(timelineByRole);
+  if (!roles.length) return;
+  roles.forEach((role) => {
     const opt = document.createElement("option");
     opt.value = role;
-    opt.textContent = role;
+    opt.textContent = role.replace(/\b\w/g, (c) => c.toUpperCase());
     selector.appendChild(opt);
+  });
+  selector.value = roles[0];
+  renderTimeline(roles[0]);
+  selector.addEventListener("change", () => renderTimeline(selector.value));
+}
+
+document.addEventListener("DOMContentLoaded", () => {
+  const primary = document.querySelector(".snapshot-kpi--primary .snapshot-kpi-value");
+  if (primary) {
+    const v = parseFloat(primary.textContent);
+    if (!isNaN(v)) {
+      primary.style.color = v >= 70 ? "#059669" : v >= 55 ? "#d97706" : "#dc2626";
+    }
+  }
+  initTimeline();
 });
 
-// ✅ auto select first role
-selector.value = roles[0];
-
-// ✅ render first graph
-renderTimeline(roles[0]);
-
-selector.addEventListener("change", () => {
-    renderTimeline(selector.value);
-});
-}
-
-
-/* ============================= */
-/* OVERALL SCORE */
-/* ============================= */
-
-function renderOverall(){
-
-const el = document.getElementById("overall-score");
-
-if(el){
-    const score = Math.round(skillProfile.overall_score || 0);
-    el.textContent = score;
-
-    if(score < 40) el.style.color = "#e74c3c";
-    else if(score < 70) el.style.color = "#f39c12";
-    else el.style.color = "#2ecc71";
-}
-}
-
-
-/* ============================= */
-/* INIT */
-/* ============================= */
-
-function init(){
-
-renderOverall()
-renderRadar()
-renderBreakdown()
-initTimeline()
-
-}
-
-window.onload=init
-
-</script>
-
-
-<script>
 const avatar = document.getElementById("userAvatar");
 const dropdown = document.getElementById("userDropdown");
-
-avatar.addEventListener("click", () => {
-  dropdown.classList.toggle("show");
-});
-
-window.addEventListener("click", function(e) {
-  if (!avatar.contains(e.target) && !dropdown.contains(e.target)) {
-    dropdown.classList.remove("show");
-  }
-});
+if (avatar && dropdown) {
+  avatar.addEventListener("click", () => dropdown.classList.toggle("show"));
+  window.addEventListener("click", (e) => {
+    if (!avatar.contains(e.target) && !dropdown.contains(e.target)) {
+      dropdown.classList.remove("show");
+    }
+  });
+}
 </script>
-
 
 </body>
 </html>
-
