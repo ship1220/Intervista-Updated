@@ -72,11 +72,17 @@ def log_reward_calculation(
     previous_score: float,
     score_improvement: float,
     reward: float,
+    weak_topic_progress: float | None = None,
+    confidence_improvement: float | None = None,
 ) -> None:
     log_section("REWARD CALCULATION")
     log_kv("Current Score", f"{overall_score:.1f}")
     log_kv("Previous Score", f"{previous_score:.1f}")
     log_kv("Score Improvement", f"{score_improvement:+.1f}")
+    if weak_topic_progress is not None:
+        log_kv("Weak Topic Progress", f"{weak_topic_progress:+.3f}")
+    if confidence_improvement is not None:
+        log_kv("Confidence Improvement", f"{confidence_improvement:+.3f}")
     log_kv("Normalized Reward", f"{reward:+.4f}  (clamped to [-1, +1])")
 
 

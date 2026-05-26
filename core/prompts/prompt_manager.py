@@ -140,6 +140,8 @@ Question:
 Candidate Answer:
 {answer}
 
+Generate an ideal candidate response in first-person. The ideal answer should be a polished, interview-ready reply with concrete examples, clear structure, and personal ownership. Do NOT include guidance, instructions, evaluation commentary, or interviewer perspective.
+
 Return ONLY valid JSON:
 {{
  "score": <number 0-100>,
@@ -150,7 +152,7 @@ Return ONLY valid JSON:
  "problem_solving_score": <number 0-100>,
  "strengths": ["..."],
  "weaknesses": ["..."],
- "ideal_answer": "max 5 sentences",
+ "ideal_answer": "A concise first-person candidate answer with a strong example, not guidance.",
  "weak_topics": ["topic1", "topic2"],
  "C": <float 0.0-1.0>,
  "K": <float 0.0-1.0>,

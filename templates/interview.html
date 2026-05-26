@@ -149,7 +149,11 @@ let recognition=null;
 let isListening=false;
 let answerSubmitted=false;
 let typingTimer=null;
+let silenceTimer=null;
 let manualSubmitMode=false;
+let manualStop=false;
+let recognitionRetryCount=0;
+const MAX_RESTARTS=3;
 
 
 /* BUTTONS */
@@ -217,77 +221,115 @@ const SpeechRecognition=window.SpeechRecognition||window.webkitSpeechRecognition
 
 function startListening(){
 
-if(!SpeechRecognition) return;
+if(!SpeechRecognition){
+const statusText=document.getElementById("voice-status-text");
+statusText.textContent="Speech recognition unsupported in this browser.";
+return;
+}
 
-recognition=new SpeechRecognition();
-
-recognition.continuous=true;
-recognition.interimResults=true;
-recognition.lang="en-US";
-
-let finalTranscript="";
-window.currentTranscript="";
-let silenceTimer=null;
-
-const SILENCE_TIMEOUT=8000;
+if(isListening) return;
+manualStop=false;
+recognitionRetryCount=0;
 
 const transcript=document.getElementById("live-transcript");
 const statusText=document.getElementById("voice-status-text");
 const ring=document.getElementById("voice-ring");
 
+recognition=new SpeechRecognition();
+recognition.continuous=true;
+recognition.interimResults=true;
+recognition.lang="en-US";
+recognition.maxAlternatives=1;
+
+let finalTranscript=transcript.value.trim() || "";
+window.currentTranscript=finalTranscript;
+
+const SILENCE_TIMEOUT=8000;
+
+function resetSilenceTimer(){
+  clearTimeout(silenceTimer);
+  if(!manualSubmitMode && !answerSubmitted){
+    silenceTimer=setTimeout(()=>{
+      finishAnswer();
+    },SILENCE_TIMEOUT);
+  }
+}
+
 recognition.onstart=()=>{
-isListening=true;
-statusText.textContent="Listening...";
-ring.classList.add("active");
+  isListening=true;
+  statusText.textContent="Listening...";
+  ring.classList.add("active");
+  resetSilenceTimer();
 };
 
 recognition.onresult=(event)=>{
+  resetSilenceTimer();
 
-clearTimeout(silenceTimer);
+  let interim="";
 
-let interim="";
+  for(let i=event.resultIndex;i<event.results.length;i++){
+    if(event.results[i].isFinal){
+      finalTranscript += event.results[i][0].transcript + " ";
+      window.currentTranscript = finalTranscript;
+    } else {
+      interim += event.results[i][0].transcript;
+    }
+  }
 
-for(let i=event.resultIndex;i<event.results.length;i++){
+  transcript.value = finalTranscript + interim;
+};
 
-if(event.results[i].isFinal){
-finalTranscript += event.results[i][0].transcript + " ";
-window.currentTranscript = finalTranscript;
-}else{
-interim+=event.results[i][0].transcript;
-}
+recognition.onerror=(event)=>{
+  console.warn("SpeechRecognition error:", event.error);
 
-}
+  if(event.error==="not-allowed" || event.error==="permission-denied"){
+    manualStop=true;
+    statusText.textContent="Microphone permission denied.";
+    isListening=false;
+    ring.classList.remove("active");
+    return;
+  }
 
-transcript.value=finalTranscript+interim;
-
-/* Auto-submit only for first 3 questions */
-
-if(!manualSubmitMode){
-
-silenceTimer=setTimeout(()=>{
-finishAnswer();
-},SILENCE_TIMEOUT);
-
-}
-
+  statusText.textContent="Speech recognition error, retrying...";
 };
 
 recognition.onend=()=>{
-isListening=false;
-ring.classList.remove("active");
+  isListening=false;
+  ring.classList.remove("active");
+
+  if(answerSubmitted || manualStop) return;
+
+  if(recognitionRetryCount < MAX_RESTARTS){
+    recognitionRetryCount++;
+    statusText.textContent="Reconnecting microphone...";
+    setTimeout(()=> startListening(), 500);
+  } else {
+    statusText.textContent="Listening stopped. Please refresh or check microphone.";
+  }
 };
 
-recognition.start();
-
+try{
+  recognition.start();
+}catch(error){
+  console.warn("SpeechRecognition failed to start:", error);
+  statusText.textContent="Unable to start microphone.";
 }
-
+}
 
 function stopListening(){
+  manualStop=true;
+  clearTimeout(silenceTimer);
 
-if(recognition && isListening){
-recognition.stop();
-}
+  if(recognition){
+    try{
+      recognition.stop();
+    }catch(_){ }
+    recognition=null;
+  }
 
+  isListening=false;
+  const ring=document.getElementById("voice-ring");
+  ring.classList.remove("active");
 }
 
 

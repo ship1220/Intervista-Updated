@@ -277,6 +277,144 @@ def safe_json_loads(json_str: str):
         return None
 
 
+def _get_recent_interview_metrics(user_id: int, db: Session, lookback: int = 5) -> dict:
+    """Return the most recent recommended action and persistence metrics for a user."""
+    interviews = (
+        db.query(Interview)
+        .filter(Interview.user_id == user_id)
+        .order_by(Interview.date.desc())
+        .limit(lookback)
+        .all()
+    )
+
+    last_action = None
+    action_streak = 0
+    previous_weak_topics = []
+    previous_confidence = 0.0
+    weak_history: list[tuple[str, ...]] = []
+
+    for interview in interviews:
+        try:
+            report = json.loads(interview.report_json)
+        except Exception:
+            continue
+
+        action = report.get("recommended_action")
+        if not action:
+            continue
+
+        if last_action is None:
+            last_action = action
+            action_streak = 1
+        elif action == last_action:
+            action_streak += 1
+        else:
+            break
+
+        weak_topics = report.get("weak_topics") or report.get("rl_metrics", {}).get("weak_topics", [])
+        if isinstance(weak_topics, str):
+            weak_topics = [weak_topics]
+        if not previous_weak_topics and isinstance(weak_topics, list):
+            previous_weak_topics = [str(t).strip() for t in weak_topics if str(t).strip()]
+
+        if isinstance(weak_topics, list):
+            normalized = tuple(sorted({str(t).strip().lower() for t in weak_topics if str(t).strip()}))
+            if normalized:
+                weak_history.append(normalized)
+
+        if previous_confidence == 0.0:
+            previous_confidence = report.get("voice_analysis", {}).get("confidence_score", 0.0) or 0.0
+
+    persistent_weak_topics = len(weak_history) >= 2 and weak_history[0] == weak_history[1]
+
+    return {
+        "last_action": last_action,
+        "action_streak": action_streak,
+        "previous_weak_topics": previous_weak_topics,
+        "previous_confidence": previous_confidence,
+        "persistent_weak_topics": persistent_weak_topics,
+    }
+
+
+def _prioritize_top_weak_topics(weak_topics: list[str], count: int = 3) -> list[str]:
+    return [str(t).strip() for t in weak_topics if str(t).strip()][:count]
+
+
+def _compose_course_topics(
+    action: str,
+    weak_topics: list[str],
+    overall_score: float,
+    persistent_weak_topics: bool = False,
+) -> tuple[list[str], str]:
+    """Map the bandit action into adaptively structured course topics and difficulty."""
+    core_topics = _prioritize_top_weak_topics(weak_topics, 3) or ["core concepts"]
+    if action == "revision":
+        base = core_topics[:2] + ["refresher exercises", "guided examples"]
+        if persistent_weak_topics:
+            base.append("application-focused practice")
+        difficulty = "easy"
+    elif action == "easy":
+        base = core_topics[:3] + ["foundational learning", "step-by-step practice"]
+        difficulty = "easy"
+    elif action == "mixed":
+        base = core_topics[:3] + ["moderate interview practice", "conceptual questions", "scenario-based drills"]
+        difficulty = "medium"
+        if persistent_weak_topics:
+            base.append("targeted drills")
+    elif action == "advanced":
+        base = [
+            f"advanced {t}" if "advanced" not in t.lower() else t
+            for t in core_topics[:3]
+        ]
+        base.extend([
+            "optimization techniques",
+            "real-world applications",
+            "system-level thinking",
+            "case studies",
+            "advanced interview scenarios",
+        ])
+        difficulty = "hard"
+    else:
+        base = core_topics + ["practical examples", "structured review"]
+        difficulty = "medium"
+
+    if overall_score > 75 and action in {"mixed", "advanced"}:
+        base.extend(["behavioral depth", "system design tradeoffs", "optimization case studies"])
+    elif overall_score <= 75 and action == "mixed":
+        base.append("concept reinforcement")
+
+    normalized = []
+    seen = set()
+    for topic in base:
+        topic = str(topic).strip()
+        if not topic or topic.lower() in seen:
+            continue
+        seen.add(topic.lower())
+        normalized.append(topic)
+    return normalized[:6], difficulty
+
+
+def _course_generation_requirements(action: str, difficulty: str, course_topics: list[str]) -> str:
+    focus_map = {
+        "revision": "refresher + guided examples",
+        "easy": "beginner structured learning",
+        "mixed": "moderate interview practice",
+        "advanced": "deep technical + advanced interview scenarios",
+    }
+    strategy = focus_map.get(action, action)
+    topics_text = ", ".join(course_topics)
+    return f"""
+MANDATORY:
+- Cover these topics in the first 2 modules: {topics_text}
+- Curriculum difficulty: {difficulty.upper()} — {strategy}
+- Learning path type: {action}
+- Module titles must name the weak topics explicitly
+- Vary exercises, examples, question styles, practical scenarios, and mock interview tasks across modules
+- Avoid identical module structure across the course
+- Use at least one application-driven or case-study module when difficulty is hard
+"""
+
+
 def normalize_questions_output(raw: str, count: int = 5) -> list[str]:
     questions = []
 
@@ -1393,6 +1531,13 @@ async def api_interview_evaluate(request: Request, db: Session = Depends(get_db)
             prev_state_id = user_state.state_id if user_state else state_id
             session_count = user_state.session_count if user_state else 0
 
+            history_metrics = _get_recent_interview_metrics(user.id, db)
+            last_action = history_metrics["last_action"]
+            action_streak = history_metrics["action_streak"]
+            previous_weak_topics = history_metrics["previous_weak_topics"]
+            previous_confidence = history_metrics["previous_confidence"]
+            persistent_weak_topics = history_metrics["persistent_weak_topics"]
+
             log_bandit_state(
                 state_id=state_id,
                 overall_score=overall,
@@ -1405,55 +1550,20 @@ async def api_interview_evaluate(request: Request, db: Session = Depends(get_db)
 
             # STEP 3: Select action using bandit (terminal logs inside select_action)
             course_learner = ContextualBandit(db=db, action_space="course")
-            action = course_learner.select_action(state_id, user_state)
+            action = course_learner.select_action(
+                state_id,
+                user_state,
+                last_action=last_action,
+                consecutive_action_count=action_streak,
+            )
 
             # STEP 4: STRICT COURSE MAPPING - Action determines topics and difficulty
-            def get_fundamentals(topics_list):
-                """Get core/fundamental topics (first 2)."""
-                return topics_list[:2] if len(topics_list) > 0 else ["core concepts"]
-
-            def get_related_topics(topics_list):
-                """Get weak topics + expanded related topics."""
-                if len(topics_list) == 0:
-                    return ["core concepts"]
-                # Combine weak topics with logical expansions
-                expanded = topics_list.copy()
-                if len(expanded) < 3:
-                    # Add generic related concepts if weak topics < 3
-                    expanded.extend(["best practices", "advanced patterns"][:3-len(expanded)])
-                return expanded
-
-            def get_advanced_topics(topics_list):
-                """Get advanced/deep topics for high performers."""
-                if len(topics_list) == 0:
-                    return ["advanced concepts"]
-                # Focus on deeper aspects of weak topics
-                advanced = [f"advanced {t}" if "advanced" not in t.lower() else t for t in topics_list[:2]]
-                advanced.extend(["system design", "optimization"])
-                return advanced[:4]
-
-            # MAP ACTION → TOPICS + DIFFICULTY
-            if action == "revision":
-                course_topics = get_fundamentals(weak_topics)
-                course_difficulty = "easy"
-
-            elif action == "easy":
-                course_topics = get_fundamentals(weak_topics)
-                course_difficulty = "easy"
-
-            elif action == "mixed":
-                course_topics = get_related_topics(weak_topics)
-                course_difficulty = "medium"
-
-            elif action == "advanced":
-                course_topics = get_advanced_topics(weak_topics)
-                course_difficulty = "hard"
-
-            else:
-                # Fallback
-                course_topics = weak_topics
-                course_difficulty = "medium"
-                logger.warning(f"[BANDIT] Unknown action={action}, using weak_topics")
+            course_topics, course_difficulty = _compose_course_topics(
+                action,
+                weak_topics,
+                overall,
+                persistent_weak_topics=persistent_weak_topics,
+            )
 
             course_topics = _normalize_course_topics(
                 role, course_topics, difficulty=course_difficulty, max_topics=6
@@ -1491,7 +1601,10 @@ async def api_interview_evaluate(request: Request, db: Session = Depends(get_db)
                         "revision",
                         db,
                         topics=_normalize_course_topics(
-                            role, get_fundamentals(weak_topics), difficulty="easy", max_topics=6
+                            role,
+                            _prioritize_top_weak_topics(weak_topics, 2),
+                            difficulty="easy",
+                            max_topics=6,
                         ),
                         difficulty="easy",
                     )
@@ -1509,16 +1622,35 @@ async def api_interview_evaluate(request: Request, db: Session = Depends(get_db)
                         "title": new_course_row.title,
                     }
 
-            # STEP 7: Calculate SIMPLE reward = score improvement normalized to [-1, 1]
+            # STEP 7: Calculate adaptive reward for learning progression
             score_improvement = overall - previous_score  # range: -100 to +100
-            reward = score_improvement / 100.0  # normalize to [-1, +1]
-            reward = max(min(reward, 1.0), -1.0)  # clamp to [-1, 1]
+            reward = calculate_reward(
+                current_score=overall,
+                previous_score=previous_score,
+                current_weak_topics=weak_topics,
+                previous_weak_topics=previous_weak_topics,
+                current_confidence=confidence,
+                previous_confidence=previous_confidence,
+            )
+
+            weak_topic_progress = 0.0
+            if previous_weak_topics:
+                prev_set = set(t.lower().strip() for t in previous_weak_topics if t)
+                curr_set = set(t.lower().strip() for t in weak_topics if t)
+                overlap = len(prev_set.intersection(curr_set))
+                weak_topic_progress = max(0.0, min(1.0, (len(prev_set) - overlap) / 3.0))
+
+            confidence_improvement = 0.0
+            if previous_confidence is not None:
+                confidence_improvement = (max(0.0, min(100.0, confidence)) - max(0.0, min(100.0, previous_confidence))) / 100.0
 
             log_reward_calculation(
                 overall_score=overall,
                 previous_score=previous_score,
                 score_improvement=score_improvement,
                 reward=reward,
+                weak_topic_progress=weak_topic_progress,
+                confidence_improvement=confidence_improvement,
             )
 
             course_title = None
@@ -2937,15 +3069,7 @@ async def create_course_internal(
         db, user.id, role, action, difficulty, course_topics
     )
 
-    strict_block = f"""
-MANDATORY:
-- Cover these topics in the first 2 modules: {topics_text}
-- Curriculum difficulty: {difficulty.upper()} — {target_difficulty}
-- Learning path type: {action}
-- Module titles must name the weak topics explicitly
-- Do NOT create introductory/beginner content if difficulty is hard
-- Do NOT create expert-only content if difficulty is easy
-"""
+    strict_block = _course_generation_requirements(action, difficulty, course_topics)
 
     outline_prompt_input = {
         "skill": role,

@@ -18,6 +18,7 @@ Usage:
 """
 
 import logging
+import math
 import random
 from typing import Optional, Tuple
 from sqlalchemy.orm import Session
@@ -45,8 +46,16 @@ COURSE_ACTIONS = {
     "advanced": 3,
 }
 
+# Action constraints by score band for course recommendations
+ACTION_STATE_CONSTRAINTS = {
+    "low": ["revision", "easy"],
+    "medium": ["easy", "mixed"],
+    "high": ["mixed", "advanced"],
+}
+
 # Hyperparameters
-EPSILON = 0.2  # Exploration probability (20% explore, 80% exploit)
+PENALTY_LAMBDA = 0.05  # Penalty per consecutive repetition
+SOFTMAX_TEMPERATURE = 0.35
 COLD_START_THRESHOLD = 2  # Sessions before using learned policy
 
 
@@ -86,28 +95,38 @@ class ContextualBandit:
     # ACTION SELECTION (ε-GREEDY)
     # ========================================================================
 
-    def select_action(self, state_id: str, user_state: Optional[UserState]) -> str:
+    def select_action(
+        self,
+        state_id: str,
+        user_state: Optional[UserState],
+        last_action: Optional[str] = None,
+        consecutive_action_count: int = 0,
+    ) -> str:
         """
-        Select an action using ε-greedy strategy with cold-start handling.
+        Select an action using adaptive exploration and softmax selection.
 
-        Cold-start (first 2 sessions):
-        - Force easy actions to bootstrap learning
-        - Interview: ask_easy_question
-        - Course: easy
-
-        After cold-start:
-        - 80% probability: select action with highest avg_reward
-        - 20% probability: select random action
+        - Cold-start: first sessions use a safe easy/revision path.
+        - Exploration rate ε(t) = 1 / (1 + t).
+        - Softmax selection over adjusted Q-values prevents premature convergence.
+        - State constraints enforce age-appropriate action sets.
+        - Repetition penalty discourages action loops.
 
         Args:
             state_id: Current discretized state
             user_state: User state record (optional, for session count)
+            last_action: Most recently recommended action
+            consecutive_action_count: Number of consecutive times the last_action was used
 
         Returns:
             Selected action name (string)
         """
         session_count = user_state.session_count if user_state else 0
+        epsilon = 1.0 / (1.0 + session_count)
+        allowed_actions = self._get_allowed_actions(state_id)
         q_values = self.get_q_value_dict(state_id)
+        adjusted_q_values = self._adjust_q_values(
+            q_values, last_action, consecutive_action_count, allowed_actions
+        )
 
         # ====== COLD START ======
         if session_count < COLD_START_THRESHOLD:
@@ -116,26 +135,25 @@ class ContextualBandit:
             log_bandit_action_selection(
                 state_id=state_id,
                 q_values=q_values,
-                epsilon=EPSILON,
+                epsilon=epsilon,
                 session_count=session_count,
                 mode=mode,
                 selected_action=action,
             )
             return action
 
-        # ====== EXPLOIT vs EXPLORE ======
         explore_roll = random.random()
-        if explore_roll >= EPSILON:
-            action = self._greedy_action(state_id, q_values)
-            mode = f"EXPLOIT (roll={explore_roll:.3f} >= ε={EPSILON})"
+        if explore_roll < epsilon:
+            action = random.choice(allowed_actions)
+            mode = f"EXPLORE (roll={explore_roll:.3f} < ε={epsilon:.3f})"
         else:
-            action = random.choice(list(self.actions.keys()))
-            mode = f"EXPLORE (roll={explore_roll:.3f} < ε={EPSILON})"
+            action = self._softmax_action(adjusted_q_values, allowed_actions)
+            mode = f"SOFTMAX (roll={explore_roll:.3f} >= ε={epsilon:.3f})"
 
         log_bandit_action_selection(
             state_id=state_id,
             q_values=q_values,
-            epsilon=EPSILON,
+            epsilon=epsilon,
             session_count=session_count,
             mode=mode,
             selected_action=action,
@@ -148,6 +166,51 @@ class ContextualBandit:
             return "ask_easy_question"
         else:
             return "easy"
+
+    def _get_allowed_actions(self, state_id: str) -> list[str]:
+        """Return actions permitted by the user's current score band."""
+        if self.action_space != "course":
+            return list(self.actions.keys())
+
+        score_level = str(state_id).split("-")[0] if state_id else "medium"
+        allowed = ACTION_STATE_CONSTRAINTS.get(score_level, list(self.actions.keys()))
+        if not allowed:
+            return list(self.actions.keys())
+        return allowed
+
+    def _adjust_q_values(
+        self,
+        q_values: dict,
+        last_action: Optional[str],
+        consecutive_action_count: int,
+        allowed_actions: list[str],
+    ) -> dict:
+        """Apply a small penalty for repeated consecutive recommendations."""
+        adjusted = {}
+        for action_name in allowed_actions:
+            q = q_values.get(action_name, 0.0)
+            if last_action and action_name == last_action and consecutive_action_count > 0:
+                q -= PENALTY_LAMBDA * consecutive_action_count
+            adjusted[action_name] = q
+        return adjusted
+
+    def _softmax_action(self, adjusted_q_values: dict, allowed_actions: list[str]) -> str:
+        """Select an action by sampling from a softmax distribution over adjusted Q-values."""
+        if not adjusted_q_values:
+            return random.choice(allowed_actions)
+
+        values = [adjusted_q_values.get(action, 0.0) for action in allowed_actions]
+        if all(v == 0.0 for v in values):
+            return random.choice(allowed_actions)
+
+        max_val = max(values)
+        exp_values = [math.exp((v - max_val) / SOFTMAX_TEMPERATURE) for v in values]
+        total = sum(exp_values)
+        if total == 0:
+            return random.choice(allowed_actions)
+
+        probabilities = [v / total for v in exp_values]
+        return random.choices(allowed_actions, weights=probabilities, k=1)[0]
 
     def _greedy_action(self, state_id: str, q_values: dict = None) -> str:
         """

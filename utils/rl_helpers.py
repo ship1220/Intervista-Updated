@@ -66,44 +66,63 @@ def get_state_id(avg_score: float, weak_topics_count: int) -> str:
 # REWARD CALCULATION (SIMPLE SCORE IMPROVEMENT)
 # =============================================================================
 
-def calculate_reward(current_score: float, previous_score: float) -> float:
+def calculate_reward(
+    current_score: float,
+    previous_score: float,
+    current_weak_topics: list | None = None,
+    previous_weak_topics: list | None = None,
+    current_confidence: float | None = None,
+    previous_confidence: float | None = None,
+) -> float:
     """
-    Calculate simple reward based on score improvement.
-    
+    Calculate an adaptive reward based on learning progression signals.
+
     Args:
         current_score: User's current score (0-100)
         previous_score: User's previous score (0-100)
-    
+        current_weak_topics: Current session weak topics
+        previous_weak_topics: Previous session weak topics
+        current_confidence: Current confidence score (0-100)
+        previous_confidence: Previous confidence score (0-100)
+
     Returns:
         Reward normalized to [-1.0, +1.0]
-    
-    Formula:
-        improvement = current_score - previous_score
-        reward = improvement / 100
-        reward = clamp(reward, -1, +1)
-    
-    Interpretation:
-        - +1.0: Improved 100+ points (capped at +1)
-        - +0.15: Improved 15 points
-        - 0.0: No change
-        - -0.30: Declined 30 points
-        - -1.0: Declined 100+ points (capped at -1)
+
+    Components:
+        0.5 × Score improvement
+        0.3 × Weak-topic progress
+        0.2 × Confidence improvement
     """
-    # Normalize scores to [0, 100]
     curr = max(0.0, min(100.0, float(current_score)))
     prev = max(0.0, min(100.0, float(previous_score)))
-    
-    # Calculate improvement
-    improvement = curr - prev
-    
-    # Normalize to [-1, +1]
-    reward = improvement / 100.0
+    score_delta = (curr - prev) / 100.0
+
+    current_weak_topics = [str(t).strip().lower() for t in (current_weak_topics or []) if str(t).strip()]
+    previous_weak_topics = [str(t).strip().lower() for t in (previous_weak_topics or []) if str(t).strip()]
+
+    prev_top = previous_weak_topics[:3]
+    curr_top = current_weak_topics[:3]
+    overlap = len(set(prev_top).intersection(set(curr_top)))
+    weak_progress = max(0.0, min(1.0, (len(prev_top) - overlap) / 3.0))
+
+    if current_confidence is None or previous_confidence is None:
+        confidence_delta = 0.0
+    else:
+        curr_conf = max(0.0, min(100.0, float(current_confidence)))
+        prev_conf = max(0.0, min(100.0, float(previous_confidence)))
+        confidence_delta = (curr_conf - prev_conf) / 100.0
+
+    reward = (
+        0.5 * score_delta
+        + 0.3 * weak_progress
+        + 0.2 * confidence_delta
+    )
     reward = max(-1.0, min(1.0, reward))
-    
+
     logger.debug(
         f"Reward: current={curr:.1f}, previous={prev:.1f}, "
-        f"improvement={improvement:.1f} → reward={reward:.3f}"
+        f"score_delta={score_delta:+.3f}, weak_progress={weak_progress:+.3f}, "
+        f"confidence_delta={confidence_delta:+.3f} → reward={reward:.3f}"
     )
-    
     return reward
 
