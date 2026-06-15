@@ -240,25 +240,44 @@ def extract_json(text: str):
     if not text:
         raise ValueError("Empty LLM response")
 
-    # 🔹 Remove markdown code blocks
-    text = text.strip()
-    text = re.sub(r"^```json", "", text, flags=re.IGNORECASE)
-    text = re.sub(r"^```", "", text)
-    text = re.sub(r"```$", "", text)
+    t = text.strip()
 
-    # 🔹 Extract JSON object
-    match = re.search(r"\{.*\}", text, re.DOTALL)
-    if not match:
+    # Remove common fenced-code markers (```json, ```), inline backtick wrappers, and language hints
+    # Do this liberally to maximize chance of extracting the JSON block.
+    t = re.sub(r'```\s*json', '', t, flags=re.IGNORECASE)
+    t = re.sub(r'```', '', t)
+    t = re.sub(r'`json\b', '', t, flags=re.IGNORECASE)
+    # Remove remaining single backticks which often surround inline JSON
+    t = t.replace('`', '')
+
+    # Find the first balanced JSON object using brace counting
+    start = t.find('{')
+    if start == -1:
         raise ValueError("No JSON object found in response")
 
-    json_str = match.group(0)
+    depth = 0
+    end = -1
+    for idx in range(start, len(t)):
+        ch = t[idx]
+        if ch == '{':
+            depth += 1
+        elif ch == '}':
+            depth -= 1
+            if depth == 0:
+                end = idx
+                break
 
-    # 🔹 Remove invalid control characters (keep only valid JSON whitespace)
+    if end == -1:
+        raise ValueError("No matching closing brace for JSON object")
+
+    json_str = t[start:end + 1]
+
+    # Remove invalid control characters that break json.loads
     json_str = re.sub(r'[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]', '', json_str)
 
-    # 🔹 Remove trailing commas (LLM bug)
-    json_str = re.sub(r",\s*}", "}", json_str)
-    json_str = re.sub(r",\s*]", "]", json_str)
+    # Fix common LLM-caused trailing commas inside objects/arrays
+    json_str = re.sub(r',\s*}', '}', json_str)
+    json_str = re.sub(r',\s*]', ']', json_str)
 
     return json.loads(json_str, strict=False)
 
@@ -3223,34 +3242,35 @@ async def get_module(module_id: int, request: Request, db: Session = Depends(get
     if not module:
         raise HTTPException(status_code=404, detail="Module not found")
 
-    def _extract_practice_links(content_text: str):
+    def _strip_practice_markers(content_text: str):
+        """Remove any embedded module practice-links marker block from stored content.
+
+        We no longer expose or render practice links separately; this helper
+        simply strips the marker block if present so the visible content is clean.
+        """
         marker_start = "<!-- MODULE_PRACTICE_LINKS_START"
         marker_end = "MODULE_PRACTICE_LINKS_END -->"
         if marker_start in content_text and marker_end in content_text:
             try:
-                payload = content_text.split(marker_start, 1)[1].split(marker_end, 1)[0].strip()
-                parsed = json.loads(payload)
-                links = parsed.get("practice_links", []) if isinstance(parsed, dict) else []
                 clean_content = content_text.split(marker_start, 1)[0].strip()
-                return clean_content, links
+                return clean_content
             except Exception:
-                return content_text, []
-        return content_text, []
+                return content_text
+        return content_text
 
     # Check if module is unlocked
     if not module.is_unlocked:
         raise HTTPException(status_code=403, detail="Module locked")
 
-    # ✅ RETURN CACHED CONTENT
+    # ✅ RETURN CACHED CONTENT (strip any historical practice-link markers)
     if module.content:
         logger.info("Using cached module")
-        content_text, cached_links = _extract_practice_links(module.content)
+        content_text = _strip_practice_markers(module.content)
         return {
             "module_id": module.id,
             "module_title": module.title,
             "content_markdown": content_text,
             "quiz": module.quiz if isinstance(module.quiz, list) else [],
-            "practice_links": cached_links,
         }
 
     course = db.query(Course).filter(Course.id == module.course_id).first()
@@ -3270,15 +3290,26 @@ async def get_module(module_id: int, request: Request, db: Session = Depends(get
     try:
         module_json = extract_json(raw)
     except Exception as e:
-        logger.error(f"Module parse error for {module_id}: {str(e)}")
-        logger.error(f"Raw LLM response: {repr(raw)}")
-        raise HTTPException(
-            status_code=500,
-            detail="Failed to parse module content from LLM"
-        )
+        # Log parsing issue and attempt a tolerant fallback instead of failing hard.
+        logger.warning(f"Module parse error for {module_id}: {str(e)}")
+        logger.debug(f"Raw LLM response (for debugging): {repr(raw)}")
+
+        # Fallback: try a loose regex-based extraction and a relaxed json.loads
+        module_json = {}
+        try:
+            m = re.search(r"\{.*\}", raw, re.DOTALL)
+            if m:
+                candidate = m.group(0)
+                # sanitize trailing commas
+                candidate = re.sub(r',\s*}', '}', candidate)
+                candidate = re.sub(r',\s*]', ']', candidate)
+                module_json = json.loads(candidate)
+        except Exception as e2:
+            logger.warning(f"Fallback JSON parse also failed for module {module_id}: {e2}")
+            module_json = {}
 
     raw_content = module_json.get("content_markdown", "") or "Detailed module content could not be retrieved. Please refresh the module."
-    raw_content, _ = _extract_practice_links(raw_content)
+    raw_content = _strip_practice_markers(raw_content)
     module.content = raw_content
     quiz_data = module_json.get("quiz", [])
     if isinstance(quiz_data, list) and len(quiz_data) == 3:
@@ -3298,49 +3329,17 @@ async def get_module(module_id: int, request: Request, db: Session = Depends(get
         quiz_data = []
     module.quiz = quiz_data
 
-    practice_links = module_json.get("practice_links", [])
-    if not isinstance(practice_links, list):
-        practice_links = []
-
-    validated_links = []
-    for item in practice_links:
-        if not isinstance(item, dict):
-            continue
-        title = item.get("title")
-        url = item.get("url")
-        if isinstance(title, str) and title and isinstance(url, str) and url.startswith("http"):
-            validated_links.append({"title": title, "url": url})
-
-    if not validated_links:
-        external_links = module_json.get("external_practice_tasks", [])
-        if isinstance(external_links, list):
-            for item in external_links:
-                if not isinstance(item, dict):
-                    continue
-                title = item.get("title")
-                url = item.get("url")
-                if isinstance(title, str) and title and isinstance(url, str) and url.startswith("http"):
-                    validated_links.append({"title": title, "url": url})
-
-    if len(validated_links) > 4:
-        validated_links = validated_links[:4]
-
-    if len(validated_links) < 2:
-        validated_links = []
-
-    if validated_links:
-        marker = f"\n\n<!-- MODULE_PRACTICE_LINKS_START\n{json.dumps({'practice_links': validated_links})}\nMODULE_PRACTICE_LINKS_END -->"
-        module.content = module.content.strip() + marker
-
+    # We no longer persist or return practice/external links for modules.
+    # Ensure stored content remains clean and return only content + quiz.
+    module.content = raw_content
     db.commit()
-    logger.info("Module generated")
+    logger.info("Module generated (links removed from flow)")
 
     return {
         "module_id": module.id,
         "module_title": module.title,
         "content_markdown": raw_content,
         "quiz": module.quiz,
-        "practice_links": validated_links
     }
 
 @app.post("/api/module/{module_id}/submit")

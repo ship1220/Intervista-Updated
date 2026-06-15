@@ -123,17 +123,8 @@ function renderModule(data) {
 
   const markdown = data.content_markdown || 'No module content available yet.';
   const quiz = Array.isArray(data.quiz) ? data.quiz : [];
-  const practiceLinks = Array.isArray(data.practice_links) ? data.practice_links : [];
 
-  let html = `<div class=\"module-section module-content\">${marked.parse(markdown)}</div>`;
-
-  if (practiceLinks.length) {
-    html += '<div class="module-section"><h3>Practice Problems</h3><ul style="padding-left:20px;">';
-    practiceLinks.forEach((link) => {
-      html += `<li style="margin-bottom:10px;"><a href="${link.url}" target="_blank" rel="noopener noreferrer">${link.title}</a></li>`;
-    });
-    html += '</ul></div>';
-  }
+  let html = `<div class="module-section module-content">${marked.parse(markdown)}</div>`;
 
   if (quiz.length) {
     html += '<div class="module-section"><h3>Module Quiz</h3>';
