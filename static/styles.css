@@ -112,7 +112,7 @@ select:focus,
 textarea:focus {
   outline: none;
   border-color: var(--primary);
-  background: #0f172a;
+  background: #ffffff;
 }
 
 /* ============================= */

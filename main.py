@@ -80,6 +80,7 @@ from utils.bandit_logger import (
     log_course_generation_decision,
     log_bandit_complete,
 )
+from utils.jd_analysis import analyze_resume_vs_jd
 from services.rl.rl_service import ContextualBandit, INTERVIEW_ACTIONS, COURSE_ACTIONS
 from models import QTable, UserState
 
@@ -105,6 +106,13 @@ def ensure_database_schema(engine):
             if "is_final" not in module_cols:
                 conn.execute(text('ALTER TABLE modules ADD COLUMN is_final BOOLEAN DEFAULT FALSE;'))
 
+        if "user_profiles" in table_names:
+            profile_cols = {col["name"] for col in inspector.get_columns("user_profiles")}
+            if "company_name" not in profile_cols:
+                conn.execute(text('ALTER TABLE user_profiles ADD COLUMN company_name VARCHAR;'))
+            if "job_description" not in profile_cols:
+                conn.execute(text('ALTER TABLE user_profiles ADD COLUMN job_description TEXT;'))
+
 
 ensure_database_schema(engine)
 
@@ -124,9 +132,6 @@ question_chain = InterviewQuestionChain(llm_service, prompt_manager, retriever)
 evaluation_chain = EvaluationChain(llm_service, prompt_manager, retriever)
 summary_chain = SummaryChain(llm_service, prompt_manager, retriever)
 
-# ------------------------------------------------------------------
-# Helper Functions
-# ------------------------------------------------------------------
 def categorize_weak_topics(weak_topics: list[str]) -> dict[str, list[str]]:
 
     technical = []
@@ -154,6 +159,70 @@ def categorize_weak_topics(weak_topics: list[str]) -> dict[str, list[str]]:
     return {
         "Technical Skills": list(set(technical)),
         "Communication & Answer Quality": list(set(communication))
+    }
+
+
+def _save_interview_profile_fields(
+    db: Session,
+    user: User,
+    *,
+    role: str | None = None,
+    level: str | None = None,
+    company_name: str | None = None,
+    job_description: str | None = None,
+) -> UserProfile:
+    """Persist optional interview targeting fields on UserProfile."""
+    profile = get_or_create_user_profile(db, user)
+    if role is not None and role.strip():
+        profile.role_applied_for = role.strip()
+    if level is not None and level.strip():
+        profile.current_designation = level.strip()
+    if company_name is not None:
+        profile.company_name = company_name.strip() or None
+    if job_description is not None:
+        profile.job_description = job_description.strip() or None
+    profile.updated_at = datetime.utcnow()
+    db.add(profile)
+    db.commit()
+    return profile
+
+
+async def _ensure_session_jd_analysis(session: dict, resume_text: str) -> dict:
+    """Run resume vs JD analysis once per interview session."""
+    if "jd_analysis" in session:
+        return session["jd_analysis"]
+
+    job_description = (session.get("job_description") or "").strip()
+    if not job_description:
+        analysis = {"matched_skills": [], "missing_skills": [], "ats_score": None}
+    else:
+        analysis = await analyze_resume_vs_jd(
+            resume_text,
+            job_description,
+            llm_service=llm_service,
+            prompt_manager=prompt_manager,
+        )
+
+    session["jd_analysis"] = analysis
+    return analysis
+
+
+def _interview_jd_payload(session: dict) -> dict:
+    """Build JD-related fields for question/evaluation chains."""
+    job_description = (session.get("job_description") or "").strip()
+    analysis = session.get("jd_analysis") or {}
+    if not job_description:
+        return {
+            "company_name": "",
+            "job_description": "",
+            "matched_skills": [],
+            "missing_skills": [],
+        }
+    return {
+        "company_name": (session.get("company_name") or "").strip(),
+        "job_description": job_description,
+        "matched_skills": analysis.get("matched_skills", []),
+        "missing_skills": analysis.get("missing_skills", []),
     }
 
 # ===========================================================================
@@ -496,7 +565,13 @@ async def generate_interview_questions(role: str, level: str, count: int = 5, re
         return []
 
 
-async def evaluate_content(role: str, level: str, questions_answers: list) -> dict:
+async def evaluate_content(
+    role: str,
+    level: str,
+    questions_answers: list,
+    company_name: str = "",
+    job_description: str = "",
+) -> dict:
     answers = []
     weak_topics = []
 
@@ -513,6 +588,8 @@ async def evaluate_content(role: str, level: str, questions_answers: list) -> di
                 "level": level,
                 "question": question,
                 "answer": answer,
+                "company_name": company_name or "N/A",
+                "job_description": job_description or "N/A",
             }
         )
 
@@ -944,12 +1021,16 @@ def index(request: Request, db: Session = Depends(get_db)):
 
     role = profile.role_applied_for if profile else ""
     level = profile.current_designation if profile else ""
+    company_name = profile.company_name if profile else ""
+    job_description = profile.job_description if profile else ""
 
     return templates.TemplateResponse(request, "index.html", {
             "request": request,
             "username": user.username,
             "saved_role": role,
             "saved_level": level,
+            "saved_company_name": company_name or "",
+            "saved_job_description": job_description or "",
         },
     )
 
@@ -962,12 +1043,50 @@ def progress_redirect(request: Request):
 # ===========================================================================
 # RESUME UPLOAD
 # ===========================================================================
+@app.post("/api/save_interview_inputs")
+async def save_interview_inputs(
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """Save role/level/company/JD without requiring a resume upload."""
+    user = get_current_user(request, db)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not logged in")
+
+    body = await request.json()
+    role = str(body.get("role", "")).strip()
+    level = str(body.get("level", "")).strip()
+    company_name = str(body.get("company_name", "")).strip()
+    job_description = str(body.get("job_description", "")).strip()
+
+    if not role or not level:
+        raise HTTPException(status_code=400, detail="role and level are required")
+
+    profile = _save_interview_profile_fields(
+        db,
+        user,
+        role=role,
+        level=level,
+        company_name=company_name,
+        job_description=job_description,
+    )
+    return {
+        "status": "ok",
+        "role": profile.role_applied_for,
+        "level": profile.current_designation,
+        "company_name": profile.company_name or "",
+        "job_description_length": len(profile.job_description or ""),
+    }
+
+
 @app.post("/api/upload_resume")
 async def upload_resume(
     request: Request,
     file: UploadFile = File(...),
     role: str = Form(...),
     level: str = Form(...),
+    company_name: str = Form(""),
+    job_description: str = Form(""),
     db: Session = Depends(get_db),
 ):
     user = get_current_user(request, db)
@@ -1051,6 +1170,8 @@ async def upload_resume(
 
     profile_row.role_applied_for = role
     profile_row.current_designation = level
+    profile_row.company_name = company_name.strip() or None
+    profile_row.job_description = job_description.strip() or None
     profile_row.resume_file_path = str(file_path)
     profile_row.extracted_skills = json.dumps(skills)
     profile_row.skill_strength_percentage = strength_pct
@@ -1094,7 +1215,16 @@ async def transcribe_endpoint(file: UploadFile = File(...)):
 # ===========================================================================
 # INTERVIEW — START (returns page for voice interview)
 # ===========================================================================
-def _build_interview_context(request: Request, user, role: str, level: str, course_id: int | None, db: Session):
+def _build_interview_context(
+    request: Request,
+    user,
+    role: str,
+    level: str,
+    course_id: int | None,
+    db: Session,
+    company_name: str = "",
+    job_description: str = "",
+):
     completed_modules = []
     course_topics = []
 
@@ -1110,10 +1240,26 @@ def _build_interview_context(request: Request, user, role: str, level: str, cour
             completed_modules = [m.title for m in modules if m.is_completed]
             course_topics = [m.title for m in modules if m.title]
 
+    profile = db.query(UserProfile).filter(UserProfile.user_id == user.id).first()
+    effective_company = (company_name or (profile.company_name if profile else "") or "").strip()
+    effective_jd = (job_description or (profile.job_description if profile else "") or "").strip()
+
+    if company_name or job_description:
+        _save_interview_profile_fields(
+            db,
+            user,
+            role=role,
+            level=level,
+            company_name=effective_company,
+            job_description=effective_jd,
+        )
+
     interview_sessions[user.username] = {
         "role": role,
         "level": level,
         "course_id": course_id,
+        "company_name": effective_company,
+        "job_description": effective_jd,
         "questions": [],
         "answers": [],
         "completed_modules": completed_modules,
@@ -1136,6 +1282,8 @@ def start_interview_page(
     request: Request,
     role: str = Form(...),
     level: str = Form(...),
+    company_name: str = Form(""),
+    job_description: str = Form(""),
     course_id: int | None = Form(None),
     db: Session = Depends(get_db),
 ):
@@ -1143,7 +1291,16 @@ def start_interview_page(
     if not user:
         raise HTTPException(status_code=401, detail="Not logged in")
 
-    return _build_interview_context(request, user, role, level, course_id, db)
+    return _build_interview_context(
+        request,
+        user,
+        role,
+        level,
+        course_id,
+        db,
+        company_name=company_name,
+        job_description=job_description,
+    )
 
 @app.get("/interview/start", response_class=HTMLResponse)
 def start_interview_get(
@@ -1207,10 +1364,15 @@ def start_interview_get(
     if resume_text:
         resume_store[user.username] = resume_text
 
+    effective_company = (profile.company_name if profile else "") or ""
+    effective_jd = (profile.job_description if profile else "") or ""
+
     interview_sessions[user.username] = {
         "role": effective_role,
         "level": effective_level,
         "course_id": course_id,
+        "company_name": effective_company,
+        "job_description": effective_jd,
         "questions": [],
         "answers": [],
         "completed_modules": completed_modules,
@@ -1318,6 +1480,14 @@ async def api_interview_next_question(request: Request, db: Session = Depends(ge
     completed_modules = session.get("completed_modules", [])
     course_topics = session.get("course_topics", [])
 
+    if "company_name" not in session or "job_description" not in session:
+        profile = db.query(UserProfile).filter(UserProfile.user_id == user.id).first()
+        session.setdefault("company_name", (profile.company_name if profile else "") or "")
+        session.setdefault("job_description", (profile.job_description if profile else "") or "")
+
+    await _ensure_session_jd_analysis(session, resume_text)
+    jd_fields = _interview_jd_payload(session)
+
     # -----------------------------
     # LLM CALL (FIXED INPUT)
     # -----------------------------
@@ -1329,7 +1499,8 @@ async def api_interview_next_question(request: Request, db: Session = Depends(ge
         "completed_modules": completed_modules,
         "course_topics": course_topics,
         "previous_questions": previous_questions,
-        "used_categories": used_categories
+        "used_categories": used_categories,
+        **jd_fields,
     }
     if course_id is not None:
         llm_payload["context_priority"] = "course_focused"
@@ -1389,6 +1560,8 @@ async def api_interview_evaluate(request: Request, db: Session = Depends(get_db)
         session = interview_sessions.get(user.username, {})
         role = body.get("role", session.get("role", "Software Developer"))
         level = body.get("level", session.get("level", "mid"))
+        company_name = session.get("company_name", "")
+        job_description = session.get("job_description", "")
         n = len(questions_answers)
 
         # -- FEATURE 2: Speech Delivery Analysis -----------------------
@@ -1419,7 +1592,13 @@ async def api_interview_evaluate(request: Request, db: Session = Depends(get_db)
         confidence = compute_confidence_score(speech_analyses)
 
         # -- FEATURE 3: Content Analysis (LLM) ------------------------
-        content_result = await evaluate_content(role, level, questions_answers)
+        content_result = await evaluate_content(
+            role,
+            level,
+            questions_answers,
+            company_name=company_name,
+            job_description=job_description,
+        )
         content_answers = content_result.get("answers", [])
         aggregate = content_result.get("aggregate", {})
 
@@ -1490,11 +1669,23 @@ async def api_interview_evaluate(request: Request, db: Session = Depends(get_db)
             })
 
         # -- FEATURE 8: Assemble Report --------------------------------
+        jd_analysis = session.get("jd_analysis")
+        if not jd_analysis and job_description:
+            resume_text = resume_store.get(user.username, "")
+            jd_analysis = await analyze_resume_vs_jd(
+                resume_text,
+                job_description,
+                llm_service=llm_service,
+                prompt_manager=prompt_manager,
+            )
+            session["jd_analysis"] = jd_analysis
+
         report = {
             "candidate_profile": candidate_profile,
             "overall_score": overall,
             "verdict": verdict,
             "performance_summary": "",  # filled below by LLM
+            "job_match_analysis": jd_analysis if job_description else None,
             "voice_analysis": {
                 "speaking_pace_wpm": round(avg_pace, 1),
                 "total_filler_words": total_fillers,

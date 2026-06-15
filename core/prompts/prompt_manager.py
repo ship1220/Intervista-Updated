@@ -68,6 +68,7 @@ class PromptManager:
         
         # PROFILE PROMPTS
         self._register_resume_skill_profile()
+        self._register_resume_jd_skill_gap()
         
         # RAG PROMPTS
         self._register_rag_retrieval()
@@ -76,10 +77,14 @@ class PromptManager:
         """Agentic interviewer system prompt for resume-aware multi-turn interviews."""
         template = """You are an elite technical recruiter and interviewer.
 
-Analyze the role, designation, resume, and learning context:
+Analyze the role, designation, resume, learning context, and optional job targeting:
 Role: {role}
 Designation: {level}
+Company (optional): {company_name}
+Job Description (optional): {job_description}
 Resume context: {resume_text}
+Matched resume skills vs JD: {matched_skills}
+Missing JD skills (gaps): {missing_skills}
 Completed module titles: {completed_modules}
 Course topics: {course_topics}
 Previous questions asked:
@@ -91,7 +96,21 @@ Used categories so far:
 {used_categories}
 
 Ask a NEW question from a DIFFERENT category if possible.
-Prioritize weak areas, course topics, and role-specific applied scenarios.
+
+WHEN Job Description is provided and not "N/A":
+- Target company: {company_name}
+- Use this question distribution across the full interview (pick the category least used so far):
+  * 30% resume-based — probe skills/experience on the resume (category: resume-based)
+  * 30% JD-based — test concepts and responsibilities from the job description (category: jd-based)
+  * 20% missing-skill-based — focus on JD skills absent or weak on the resume (category: missing-skill)
+  * 20% behavioral/company-fit — culture, collaboration, ownership aligned with JD and company (category: behavioral-company-fit)
+- Example: resume skill React + JD skill AWS → ask about React experience, AWS concepts, or AWS scenarios as appropriate.
+- Behavioral questions should reflect company expectations in the JD.
+
+WHEN Job Description is empty or "N/A":
+- Ignore JD-specific distribution and use standard interview behavior.
+- Prioritize weak areas, course topics, and role-specific applied scenarios.
+- Categories: behavioral|situational|technical|logical|project-specific
 
 Rules:
 - NEVER repeat previous questions
@@ -102,7 +121,7 @@ Rules:
 Return ONLY JSON:
 {{
  "question": "...",
- "category": "behavioral|situational|technical|logical|project-specific"
+ "category": "resume-based|jd-based|missing-skill|behavioral-company-fit|behavioral|situational|technical|logical|project-specific"
 }}
 """
         
@@ -119,6 +138,13 @@ Return ONLY JSON:
 
 IMPORTANT: The answer is from speech-to-text. Ignore spelling/grammar/STT mistakes.
 Judge intent and substance. Do not penalize homophones or minor word errors.
+
+Target company (optional): {company_name}
+Job Description context (optional): {job_description}
+
+If a Job Description is provided and not "N/A":
+- Briefly consider whether the answer addresses JD expectations and required skills.
+- Use JD only as additional context — do NOT drastically change scoring weights.
 
 Scoring rules:
 - 0 → skipped or empty
@@ -339,6 +365,39 @@ Extract and analyze. Return ONLY JSON:
             template,
             PromptCategory.PROFILE,
             "2.0"
+        )
+
+    def _register_resume_jd_skill_gap(self):
+        """Compare resume skills against a job description for interview targeting."""
+        template = """You are an ATS-style resume screener.
+
+Compare the candidate resume against the job description.
+Identify concrete skills, tools, and technologies (not vague traits).
+
+Resume:
+{resume_text}
+
+Job Description:
+{job_description}
+
+Return ONLY valid JSON:
+{{
+ "matched_skills": ["skills present in both resume and JD"],
+ "missing_skills": ["important JD skills weak or absent on resume"],
+ "ats_score": <integer 0-100 approximate match>
+}}
+
+Rules:
+- ats_score is approximate based on skill/requirement overlap.
+- Keep lists concise (max 10 items each).
+- Use specific skill names (e.g. "AWS", "React", "SQL").
+- JSON only. No markdown."""
+        
+        self._register(
+            "resume_jd_skill_gap",
+            template,
+            PromptCategory.PROFILE,
+            "1.0"
         )
     
     def _register_rag_retrieval(self):

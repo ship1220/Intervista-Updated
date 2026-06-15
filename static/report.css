@@ -1,6 +1,25 @@
-/* ============================= */
-/* Report Page Specific Styles */
-/* ============================= */
+.skill-match-list {
+  list-style: none;
+  padding-left: 0;
+  margin: 12px 0 0;
+}
+
+.skill-match-list li {
+  margin-bottom: 8px;
+}
+
+.skill-match-ok {
+  color: #22c55e;
+  margin-right: 8px;
+  font-weight: 700;
+}
+
+.skill-match-gap {
+  color: #ef4444;
+  margin-right: 8px;
+  font-weight: 700;
+}
+
 /* USER MENU CONTAINER */
 .user-menu{
   position: relative;

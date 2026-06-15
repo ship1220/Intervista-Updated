@@ -144,6 +144,38 @@ Confidence: {{ report.verdict.confidence_level }}
 </section>
 
 
+{% if report.job_match_analysis %}
+{% set jma = report.job_match_analysis %}
+<section class="card fade-in">
+
+<h2>Job Match Analysis</h2>
+
+{% if jma.ats_score is not none %}
+<p><strong>ATS Match Score:</strong> {{ jma.ats_score }}/100</p>
+{% endif %}
+
+{% if jma.matched_skills %}
+<h3>Matched Skills</h3>
+<ul class="skill-match-list">
+{% for skill in jma.matched_skills %}
+<li><span class="skill-match-ok">&#10003;</span> {{ skill }}</li>
+{% endfor %}
+</ul>
+{% endif %}
+
+{% if jma.missing_skills %}
+<h3>Missing Skills</h3>
+<ul class="skill-match-list">
+{% for skill in jma.missing_skills %}
+<li><span class="skill-match-gap">&#10007;</span> {{ skill }}</li>
+{% endfor %}
+</ul>
+{% endif %}
+
+</section>
+{% endif %}
+
+
 <!-- ===================================================== -->
 <!-- AI PERFORMANCE SUMMARY -->
 <!-- ===================================================== -->

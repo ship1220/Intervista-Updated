@@ -46,6 +46,8 @@ class UserProfile(Base):
     # Targeting and resume metadata
     role_applied_for = Column(String, nullable=True)
     current_designation = Column(String, nullable=True)
+    company_name = Column(String, nullable=True)
+    job_description = Column(Text, nullable=True)
     resume_file_path = Column(String, nullable=True)
 
     # Aggregated skill data

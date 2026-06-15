@@ -66,6 +66,12 @@
 
 </select>
 
+        <label for="company_name">Company Name (optional)</label>
+        <input type="text" id="company_name" name="company_name" value="{{ saved_company_name }}" placeholder="e.g. Acme Corp">
+
+        <label for="job_description">Job Description (optional)</label>
+        <textarea id="job_description" name="job_description" rows="8" placeholder="Paste the full job description here for company-specific interview questions...">{{ saved_job_description }}</textarea>
+
         <label for="resume">Resume (optional)</label>
         <input type="file" id="resume" accept=".pdf,.docx" />
         <small id="resume-status" style="color: var(--text-muted); font-size: 0.85rem;">
@@ -84,6 +90,8 @@
         <form id="interview-form" method="post" action="/start_interview/">
           <input type="hidden" id="hidden-role" name="role">
           <input type="hidden" id="hidden-level" name="level">
+          <input type="hidden" id="hidden-company" name="company_name">
+          <input type="hidden" id="hidden-job-description" name="job_description">
           <button type="submit" class="btn" id="btn-interview">
             Take Voice Interview
           </button>
@@ -112,6 +120,8 @@
 
     const role = document.getElementById("role").value.trim();
     const level = document.getElementById("level").value;
+    const companyName = document.getElementById("company_name").value.trim();
+    const jobDescription = document.getElementById("job_description").value.trim();
     const resumeFile = document.getElementById("resume").files[0];
 
     if (!role || !level) {
@@ -120,15 +130,43 @@
     }
 
     const startBtn = document.getElementById("start-btn");
+    startBtn.textContent = "Saving...";
+    startBtn.disabled = true;
+
+    try {
+      const saveResp = await fetch("/api/save_interview_inputs", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({
+          role,
+          level,
+          company_name: companyName,
+          job_description: jobDescription,
+        }),
+      });
+      if (!saveResp.ok) {
+        const err = await saveResp.json();
+        alert("Failed to save inputs: " + (err.detail || "Unknown error"));
+        startBtn.textContent = "Start Learning";
+        startBtn.disabled = false;
+        return;
+      }
+    } catch (err) {
+      alert("Failed to save inputs: " + err.message);
+      startBtn.textContent = "Start Learning";
+      startBtn.disabled = false;
+      return;
+    }
 
     // Upload resume if provided
     if (resumeFile) {
       startBtn.textContent = "Uploading resume...";
-      startBtn.disabled = true;
       const fd = new FormData();
       fd.append("file", resumeFile);
       fd.append("role", role);
       fd.append("level", level);
+      fd.append("company_name", companyName);
+      fd.append("job_description", jobDescription);
       try {
         const resp = await fetch("/api/upload_resume", { method: "POST", body: fd });
         if (resp.ok) {
@@ -147,20 +185,24 @@
         startBtn.disabled = false;
         return;
       }
-      startBtn.textContent = "Start Learning";
-      startBtn.disabled = false;
     }
+
+    startBtn.textContent = "Start Learning";
+    startBtn.disabled = false;
 
     // Hide input section, show choices section
     inputSection.style.display = "none";
     choicesSection.style.display = "block";
 
     // Display selected role and level
-    document.getElementById("role-display").innerText = `Role: ${role} | Level: ${level}`;
+    const companyLabel = companyName ? ` | Company: ${companyName}` : "";
+    document.getElementById("role-display").innerText = `Role: ${role} | Level: ${level}${companyLabel}`;
 
     // Set hidden values for both forms
     document.getElementById("hidden-role").value = role;
     document.getElementById("hidden-level").value = level;
+    document.getElementById("hidden-company").value = companyName;
+    document.getElementById("hidden-job-description").value = jobDescription;
     document.getElementById("hidden-role-roadmap").value = role;
     document.getElementById("hidden-designation").value = level;
 

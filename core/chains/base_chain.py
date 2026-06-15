@@ -317,6 +317,10 @@ class InterviewQuestionChain(BaseChain):
             "level": input_data.get("level", "Junior"),
             "count": input_data.get("count", 5),
             "resume_text": input_data.get("resume_text", ""),
+            "company_name": input_data.get("company_name") or "N/A",
+            "job_description": input_data.get("job_description") or "N/A",
+            "matched_skills": ", ".join(input_data.get("matched_skills", [])) if isinstance(input_data.get("matched_skills", []), list) else str(input_data.get("matched_skills", "") or "N/A"),
+            "missing_skills": ", ".join(input_data.get("missing_skills", [])) if isinstance(input_data.get("missing_skills", []), list) else str(input_data.get("missing_skills", "") or "N/A"),
             "completed_modules": ", ".join(input_data.get("completed_modules", [])) if isinstance(input_data.get("completed_modules", []), list) else str(input_data.get("completed_modules", "")),
             "course_topics": ", ".join(input_data.get("course_topics", [])) if isinstance(input_data.get("course_topics", []), list) else str(input_data.get("course_topics", "")),
             "previous_questions": "\n".join(previous_questions) if isinstance(previous_questions, list) else str(previous_questions),
@@ -377,7 +381,9 @@ class EvaluationChain(BaseChain):
             "role": input_data.get("role", "Software Engineer"),
             "level": input_data.get("level", "Junior"),
             "question": input_data.get("question", ""),
-            "answer": input_data.get("answer", "")
+            "answer": input_data.get("answer", ""),
+            "company_name": input_data.get("company_name") or "N/A",
+            "job_description": input_data.get("job_description") or "N/A",
         }
         
         # Use RAG to retrieve evaluation rubrics
